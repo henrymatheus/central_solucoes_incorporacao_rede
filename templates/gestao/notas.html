@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% load static utilidades %}
+{% block title %}Notas | Central de Incorporação{% endblock %}
+{% block content %}
+<header class="topo">
+  <div>
+    <p class="eyebrow">Carteira de notas de incorporação</p>
+    <h1>Notas</h1>
+    <p class="muted topo-sub">Encontre, filtre e abra a ficha de qualquer nota.</p>
+  </div>
+  <p class="topo-atualizado">
+    {% if ultima %}Dados do Snowflake de <strong>{{ ultima.finalizado_em|date:"d/m/Y H:i" }}</strong>{% else %}Base ainda não sincronizada{% endif %}
+  </p>
+</header>
+
+<form class="panel filtros-notas" method="get" aria-label="Filtros da lista de notas">
+  <label class="largo">Buscar
+    <input type="search" name="q" value="{{ f.q|default:'' }}" maxlength="40" placeholder="Nota, nota PROJ, PEP ou município">
+  </label>
+  {% for dim, rotulo in dimensoes.items %}
+    <label>{{ rotulo }}
+      <select name="{{ dim }}" data-autoenvio>
+        <option value="">Todos</option>
+        {% for v in opcoes|obter:dim %}<option value="{{ v }}" {% if f|obter:dim == v %}selected{% endif %}>{{ v }}</option>{% endfor %}
+      </select>
+    </label>
+  {% endfor %}
+  <label>Situação
+    <select name="situacao" data-autoenvio>
+      {% for k, rotulo in situacoes.items %}<option value="{{ k }}" {% if f.situacao == k or not f.situacao and k == "ativa" %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Prazo da nota
+    <select name="prazo_nota" data-autoenvio>
+      <option value="">Todos</option>
+      {% for k, rotulo in prazos.items %}<option value="{{ k }}" {% if f.prazo_nota == k %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Prazo da medida
+    <select name="prazo_medida" data-autoenvio>
+      <option value="">Todos</option>
+      {% for k, rotulo in prazos_medida.items %}<option value="{{ k }}" {% if f.prazo_medida == k %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Atraso
+    <select name="faixa_atraso" data-autoenvio>
+      <option value="">Todos</option>
+      {% for k, rotulo in atrasos.items %}<option value="{{ k }}" {% if f.faixa_atraso == k %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Idade
+    <select name="faixa_idade" data-autoenvio>
+      <option value="">Todas</option>
+      {% for k, rotulo in idades.items %}<option value="{{ k }}" {% if f.faixa_idade == k %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Criada de<input type="date" name="criada_de" value="{{ f.criada_de|date:'Y-m-d' }}"></label>
+  <label>Criada até<input type="date" name="criada_ate" value="{{ f.criada_ate|date:'Y-m-d' }}"></label>
+  <label>Ordenar por
+    <select name="ordem" data-autoenvio>
+      {% for k, rotulo in ordens.items %}<option value="{{ k }}" {% if f.ordem == k or not f.ordem and k == "atraso" %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+    </select>
+  </label>
+  {% if f.encerrada_de %}<input type="hidden" name="encerrada_de" value="{{ f.encerrada_de|date:'Y-m-d' }}">{% endif %}
+  {% if f.encerrada_ate %}<input type="hidden" name="encerrada_ate" value="{{ f.encerrada_ate|date:'Y-m-d' }}">{% endif %}
+  <div class="acoes">
+    <button class="button primary small" type="submit">Filtrar</button>
+    <a class="button small" href="?">Limpar</a>
+  </div>
+</form>
+
+{% if chips %}
+  <div class="chips-filtros" aria-label="Filtros ativos">
+    {% for c in chips %}<a class="chip-filtro" href="{{ c.remover }}" title="Remover filtro">{{ c.rotulo }}: <strong>{{ c.valor }}</strong> <span aria-hidden="true">✕</span></a>{% endfor %}
+  </div>
+{% endif %}
+
+{% if sem_dados %}{% include "gestao/_vazio.html" %}{% else %}
+<section class="panel table-panel">
+  <div class="section-heading pad">
+    <div><h2>{{ total_lista|milhar }} nota{{ total_lista|pluralize }}</h2><p class="muted">Página {{ lista.number }} de {{ lista.paginator.num_pages }}</p></div>
+    <a class="button small" href="{{ url_exportar }}" data-download>Exportar Excel</a>
+  </div>
+  <div class="table-wrap">
+    <table class="tabela-notas">
+      <thead>
+        <tr><th>Nota</th><th>Local</th><th>Gerência</th><th>Medida atual</th><th>Prazo da nota</th><th>Prazo da medida</th><th>Criada</th><th class="num">Valor</th></tr>
+      </thead>
+      <tbody>
+        {% for x in lista %}
+          <tr>
+            <td><a class="link-strong" href="{% url 'gestao:nota' x.nota %}">{{ x.nota }}</a>
+              {% if not x.ativa %}<small>{{ x.obj.get_situacao_display }}{% if x.encerramento %} em {{ x.encerramento|date:"d/m/Y" }}{% endif %}</small>{% elif x.obj.nota_proj %}<small>PROJ {{ x.obj.nota_proj }}</small>{% endif %}
+            </td>
+            <td>{{ x.estado }} · {{ x.regional }}<small>{{ x.obj.municipio }}</small></td>
+            <td>{{ x.gerencia }}</td>
+            <td>{{ x.medida }}{% if x.ativa %}<small>há {{ x.dias_na_medida|dias }}{% if x.medida_texto %} · {{ x.medida_texto|truncatechars:34 }}{% endif %}</small>{% endif %}</td>
+            <td>{% if x.prazo_nota %}<span class="chip p-{{ x.prazo_nota }}">{% if x.prazo_nota == "vencida" %}{{ x.atraso_nota|dias }} de atraso{% else %}{{ prazos|obter:x.prazo_nota }}{% endif %}</span><small>{{ x.obj.fim_desejado|date:"d/m/Y" }}</small>{% else %}—{% endif %}</td>
+            <td>{% if x.prazo_medida %}<span class="chip p-{{ x.prazo_medida }}">{% if x.prazo_medida == "vencida" %}{{ x.atraso_medida|dias }} de atraso{% else %}{{ prazos_medida|obter:x.prazo_medida }}{% endif %}</span><small>{{ x.obj.fim_programado_medida|date:"d/m/Y" }}</small>{% else %}—{% endif %}</td>
+            <td>{{ x.criacao|date:"d/m/Y" }}<small>{{ x.idade|dias }}</small></td>
+            <td class="num">{% if x.valor %}{{ x.valor|brl }}{% else %}—{% endif %}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="8" class="empty-state">Nenhuma nota com esses filtros.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if lista.paginator.num_pages > 1 %}
+  <div class="pagination">
+    {% if lista.has_previous %}<a href="?{% if qs_sem_pagina %}{{ qs_sem_pagina }}&amp;{% endif %}page={{ lista.previous_page_number }}">← Anterior</a>{% else %}<span></span>{% endif %}
+    <span>Página {{ lista.number }} de {{ lista.paginator.num_pages }}</span>
+    {% if lista.has_next %}<a href="?{% if qs_sem_pagina %}{{ qs_sem_pagina }}&amp;{% endif %}page={{ lista.next_page_number }}">Próxima →</a>{% else %}<span></span>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

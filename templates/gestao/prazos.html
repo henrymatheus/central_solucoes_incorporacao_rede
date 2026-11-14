@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% load static utilidades %}
+{% block title %}Prazos | Central de Incorporação{% endblock %}
+{% block content %}
+{% include "gestao/_topo.html" with titulo="Prazos" subtitulo="Prazo da nota (fim desejado) e prazo da medida atual (fim programado), só para notas ativas." %}
+{% if sem_dados %}{% include "gestao/_vazio.html" %}{% else %}
+
+<div class="grade-2">
+  <section class="panel">
+    <div class="section-heading"><div><h2>Prazo da nota</h2><p class="muted">Fim desejado × hoje · {{ r.ativas|milhar }} notas ativas</p></div></div>
+    <div class="faixas-prazo">
+      <a class="faixa crit" href="{{ links.notas_vencidas }}"><strong>{{ r.notas_vencidas|milhar }}</strong><span>Vencidas</span><small>{{ r.notas_vencidas_pct|br_pct }} da carteira</small></a>
+      <a class="faixa warn" href="{{ links.notas_a_vencer }}"><strong>{{ r.notas_a_vencer|milhar }}</strong><span>Vencem em até 7 dias</span></a>
+      <a class="faixa ok" href="{{ links.notas_no_prazo }}"><strong>{{ r.notas_no_prazo|milhar }}</strong><span>No prazo</span></a>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="section-heading"><div><h2>Prazo da medida atual</h2><p class="muted">Fim programado da medida × hoje</p></div></div>
+    <div class="faixas-prazo">
+      <a class="faixa crit" href="{{ links.medidas_vencidas }}"><strong>{{ r.medidas_vencidas|milhar }}</strong><span>Vencidas</span><small>{{ r.medidas_vencidas_pct|br_pct }} das notas ativas</small></a>
+      <a class="faixa warn" href="{{ links.medidas_a_vencer }}"><strong>{{ r.medidas_a_vencer|milhar }}</strong><span>Vencem em até 7 dias</span></a>
+      <a class="faixa ok" href="{{ links.medidas_no_prazo }}"><strong>{{ r.medidas_no_prazo|milhar }}</strong><span>No prazo</span></a>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="section-heading">
+    <div><h2>Há quanto tempo as notas estão vencidas</h2><p class="muted">Notas vencidas por faixa de atraso. Atraso mediano {{ r.atraso_mediano|dias }}. Clique numa barra para ver as notas.</p></div>
+  </div>
+  <div class="grafico baixo" data-grafico="atraso" role="img" aria-label="Notas vencidas por faixa de atraso"></div>
+</section>
+
+<section class="panel table-panel">
+  <div class="section-heading pad">
+    <div><h2>Prazos por {{ nivel_rotulo|lower }}</h2><p class="muted">Ordenado pelo número de notas vencidas.</p></div>
+    <nav class="segmentado" aria-label="Agrupar por">
+      {% for d, rotulo in dimensoes.items %}<a href="{{ links_nivel|obter:d }}" {% if d == nivel %}aria-current="true"{% endif %}>{{ rotulo }}</a>{% endfor %}
+    </nav>
+  </div>
+  <div class="table-wrap">
+    <table class="tabela-num">
+      <thead><tr><th>{{ nivel_rotulo }}</th><th>Ativas</th><th>Notas vencidas</th><th>% vencidas</th><th>Vencem em 7 d</th><th>Atraso médio</th><th>Medidas vencidas</th><th>Tempo na medida</th></tr></thead>
+      <tbody>
+        {% for g in grupos %}
+          <tr>
+            <td class="texto"><a class="link-strong" href="{{ g.url_detalhar }}">{{ g.chave }}</a>{% if g.texto %}<small>{{ g.texto }}</small>{% endif %}</td>
+            <td><a href="{{ g.url_notas }}">{{ g.ativas|milhar }}</a></td>
+            <td><a href="{{ g.url_vencidas }}">{{ g.vencidas|milhar }}</a></td>
+            <td><span class="barra-inline crit" aria-hidden="true"><i style="width: {{ g.pct_vencidas|largura }}"></i></span>{{ g.pct_vencidas|br_pct }}</td>
+            <td><a href="{{ g.url_a_vencer }}">{{ g.a_vencer|milhar }}</a></td>
+            <td>{{ g.atraso_medio|dias }}</td>
+            <td><a href="{{ g.url_medidas_vencidas }}">{{ g.medidas_vencidas|milhar }}</a> <small class="pct">{{ g.pct_medidas_vencidas|br_pct }}</small></td>
+            <td>{{ g.parada_media|dias }}</td>
+          </tr>
+        {% empty %}<tr><td colspan="8" class="empty-state">Nenhuma nota ativa.</td></tr>{% endfor %}
+      </tbody>
+      <tfoot><tr><th>Total</th><th>{{ total.ativas|milhar }}</th><th>{{ total.vencidas|milhar }}</th><th>{{ total.pct_vencidas|br_pct }}</th><th>{{ total.a_vencer|milhar }}</th><th>{{ total.atraso_medio|dias }}</th><th>{{ total.medidas_vencidas|milhar }}</th><th>{{ total.parada_media|dias }}</th></tr></tfoot>
+    </table>
+  </div>
+</section>
+
+<div class="grade-2">
+  <section class="panel table-panel">
+    <div class="section-heading pad"><div><h2>Gargalos por medida</h2><p class="muted">Medidas com mais prazos vencidos e o tempo médio em que as notas estão nelas.</p></div></div>
+    <div class="table-wrap">
+      <table class="tabela-num">
+        <thead><tr><th>Medida</th><th>Notas</th><th>Vencidas</th><th>Tempo médio</th></tr></thead>
+        <tbody>
+          {% for m in gargalos %}
+            <tr>
+              <td class="texto"><a class="link-strong" href="{{ m.url_notas }}&amp;ordem=parada">{{ m.chave }}</a><small>{{ m.texto }}</small></td>
+              <td><a href="{{ m.url_notas }}">{{ m.ativas|milhar }}</a></td>
+              <td><a href="{{ m.url_medidas_vencidas }}">{{ m.medidas_vencidas|milhar }}</a> <small class="pct">{{ m.pct_medidas_vencidas|br_pct }}</small></td>
+              <td>{{ m.parada_media|dias }}</td>
+            </tr>
+          {% empty %}<tr><td colspan="4" class="empty-state">Nenhuma medida.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel table-panel">
+    <div class="section-heading pad"><div><h2>Notas com maior atraso</h2><p class="muted">Dias além do fim desejado.</p></div><a class="button small" href="{{ url_todas_atrasadas }}">Ver todas</a></div>
+    <div class="table-wrap">
+      <table class="tabela-notas">
+        <thead><tr><th>Nota</th><th>Gerência</th><th>Medida</th><th class="num">Atraso</th></tr></thead>
+        <tbody>
+          {% for x in atrasadas %}
+            <tr>
+              <td><a class="link-strong" href="{% url 'gestao:nota' x.nota %}">{{ x.nota }}</a><small>{{ x.estado }} · {{ x.regional }}</small></td>
+              <td>{{ x.gerencia }}</td>
+              <td>{{ x.medida }}<small>há {{ x.dias_na_medida|dias }}</small></td>
+              <td class="num"><span class="chip crit">{{ x.atraso_nota|dias }}</span></td>
+            </tr>
+          {% empty %}<tr><td colspan="4" class="empty-state">Nenhuma nota vencida.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{{ graficos|json_script:"dados-graficos" }}
+{% endif %}
+<script src="{% static 'vendor/echarts.min.js' %}" defer></script>
+<script src="{% static 'js/graficos.js' %}" defer></script>
+{% endblock %}

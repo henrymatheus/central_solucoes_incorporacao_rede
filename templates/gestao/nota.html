@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% load utilidades seguranca %}
+{% block title %}Nota {{ n.nota }} | Central de Incorporação{% endblock %}
+{% block content %}
+<header class="topo">
+  <div>
+    <p class="eyebrow"><a href="{% if voltar %}{{ voltar }}{% else %}{% url 'gestao:notas' %}{% endif %}">← Notas</a></p>
+    <h1>Nota {{ n.nota }} <span class="chip situacao-{{ n.situacao }}">{{ n.get_situacao_display }}</span></h1>
+    <p class="muted topo-sub">
+      {{ n.estado }} · {{ n.regional|default:"sem regional" }} · {{ n.municipio|default:"sem município" }}
+      · Gerência <strong>{{ n.gerencia|default:"não mapeada" }}</strong>
+      <span class="origem" title="Origem da gerência">({{ n.get_origem_gerencia_display }})</span>
+    </p>
+  </div>
+  <p class="topo-atualizado">Sincronizada em <strong>{{ n.sincronizado_em|date:"d/m/Y H:i" }}</strong></p>
+</header>
+
+<section class="kpis ficha-kpis" aria-label="Resumo da nota">
+  <div class="kpi {% if r.prazo_nota == 'vencida' %}critico{% elif r.prazo_nota == 'a_vencer' %}atencao{% endif %}">
+    <span>Prazo da nota</span>
+    <strong>{% if r.prazo_nota == "vencida" %}{{ r.atraso_nota|dias }} de atraso{% elif r.prazo_nota %}{{ rotulos_prazo|obter:r.prazo_nota }}{% else %}{{ n.get_situacao_display }}{% endif %}</strong>
+    <small>Fim desejado {{ n.fim_desejado|date:"d/m/Y"|default:"—" }}</small>
+  </div>
+  <div class="kpi {% if r.prazo_medida == 'vencida' %}critico{% elif r.prazo_medida == 'a_vencer' %}atencao{% endif %}">
+    <span>Medida atual · {{ n.medida_atual|default:"—" }}</span>
+    <strong>{% if r.prazo_medida == "vencida" %}{{ r.atraso_medida|dias }} de atraso{% elif r.prazo_medida %}{{ rotulos_prazo_medida|obter:r.prazo_medida }}{% else %}—{% endif %}</strong>
+    <small>{{ n.texto_breve_grupo_codigo|default:"" }}{% if r.dias_na_medida is not None %} · aberta há {{ r.dias_na_medida|dias }}{% endif %} · fim programado {{ n.fim_programado_medida|date:"d/m/Y"|default:"—" }}</small>
+  </div>
+  <div class="kpi">
+    <span>Idade</span>
+    <strong>{{ r.idade|dias }}</strong>
+    <small>Criada em {{ n.data_criacao|date:"d/m/Y"|default:"—" }}{% if n.data_encerramento and not r.ativa %} · encerrada em {{ n.data_encerramento|date:"d/m/Y" }}{% endif %}</small>
+  </div>
+  <div class="kpi">
+    <span>Orçamento</span>
+    <strong>{% if n.vl_total_orcamento %}{{ n.vl_total_orcamento|brl }}{% else %}—{% endif %}</strong>
+    <small>{% if n.nota_proj %}Nota PROJ {{ n.nota_proj }} · {{ n.status_sgo }}{% else %}Sem nota PROJ{% endif %}</small>
+  </div>
+</section>
+
+<div class="ficha">
+  <div class="ficha-dados">
+    {% for s in secoes %}
+      <section class="panel">
+        <h2>{{ s.titulo }}</h2>
+        <dl class="detail-grid">
+          {% for rotulo, valor in s.itens %}<div><dt>{{ rotulo }}</dt><dd>{{ valor }}</dd></div>{% endfor %}
+        </dl>
+      </section>
+    {% endfor %}
+    <details class="panel todos-campos">
+      <summary>Todos os campos da origem ({{ todos_campos|length }})</summary>
+      <dl class="detail-grid">
+        {% for k, v in todos_campos %}<div><dt>{{ k }}</dt><dd>{{ v|default:"—" }}</dd></div>{% endfor %}
+      </dl>
+    </details>
+  </div>
+
+  <aside class="ficha-lado">
+    <section class="panel" id="acompanhamento">
+      <h2>Acompanhamento</h2>
+      <form class="stack-form" method="post" action="{% url 'gestao:acompanhar' n.nota %}">
+        {% csrf_token %}{% chave_envio %}
+        <label for="texto-acomp" class="sr-only">Novo registro</label>
+        <textarea id="texto-acomp" name="texto" rows="3" maxlength="{{ max_acompanhamento }}" required placeholder="O que foi feito, com quem falou, próximo passo…"></textarea>
+        <button class="button primary small" type="submit" data-loading-text="Salvando…">Registrar</button>
+      </form>
+      {% for a in acompanhamentos %}
+        <article class="timeline-item">
+          <time datetime="{{ a.criado_em|date:'c' }}">{{ a.criado_em|date:"d/m/Y H:i" }} · {{ a.autor.get_full_name|default:a.autor.username|default:"—" }}</time>
+          <p>{{ a.texto|linebreaksbr }}</p>
+        </article>
+      {% empty %}
+        <p class="muted">Nenhum registro ainda.</p>
+      {% endfor %}
+    </section>
+
+    <section class="panel">
+      <h2>Linha do tempo</h2>
+      <p class="muted">Datas da origem e mudanças vistas nas fotos diárias ({{ dias_historico }} dia{{ dias_historico|pluralize }} de histórico).</p>
+      {% for e in eventos %}
+        <article class="timeline-item">
+          <time datetime="{{ e.data|date:'Y-m-d' }}">{{ e.data|date:"d/m/Y" }}</time>
+          <p><strong>{{ e.titulo }}</strong>{% if e.detalhe %}<br><span class="muted">{{ e.detalhe }}</span>{% endif %}</p>
+        </article>
+      {% empty %}
+        <p class="muted">Sem eventos.</p>
+      {% endfor %}
+    </section>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% load static utilidades %}
+{% block title %}Visão geral | Central de Incorporação{% endblock %}
+{% block content %}
+{% include "gestao/_topo.html" with titulo="Visão geral" subtitulo="Como está a carteira hoje: estoque, entradas, encerramentos e prazos." %}
+{% if sem_dados %}{% include "gestao/_vazio.html" %}{% else %}
+
+<section class="kpis" aria-label="Indicadores principais">
+  <a class="kpi destaque" href="{{ links.ativas }}">
+    <span>Carteira ativa</span>
+    <strong>{{ r.ativas|milhar }}</strong>
+    <small>{{ r.valor|brl_c }} orçados · idade média {{ r.idade_media|dias }}</small>
+  </a>
+  <a class="kpi" href="{{ links.entrantes_mes }}">
+    <span>Entrantes no mês</span>
+    <strong>{{ r.entrantes_mes|milhar }}</strong>
+    <small>hoje {{ r.entrantes_hoje|milhar }} · últimos 7 dias {{ r.entrantes_7|milhar }}</small>
+  </a>
+  <a class="kpi" href="{{ links.encerradas_mes }}">
+    <span>Encerradas no mês</span>
+    <strong>{{ r.encerradas_mes|milhar }}</strong>
+    <small>{{ r.finalizadas_mes|milhar }} finalizadas · {{ r.canceladas_mes|milhar }} canceladas</small>
+  </a>
+  <a class="kpi critico" href="{{ links.notas_vencidas }}">
+    <span>Notas vencidas</span>
+    <strong>{{ r.notas_vencidas|milhar }}</strong>
+    <small>{{ r.notas_vencidas_pct|br_pct }} da carteira · atraso mediano {{ r.atraso_mediano|dias }}</small>
+  </a>
+  <a class="kpi critico" href="{{ links.medidas_vencidas }}">
+    <span>Medidas vencidas</span>
+    <strong>{{ r.medidas_vencidas|milhar }}</strong>
+    <small>{{ r.medidas_vencidas_pct|br_pct }} das notas ativas</small>
+  </a>
+  <a class="kpi atencao" href="{{ links.notas_a_vencer }}">
+    <span>Notas que vencem em até 7 dias</span>
+    <strong>{{ r.notas_a_vencer|milhar }}</strong>
+    <small>e {{ r.medidas_a_vencer|milhar }} medidas no mesmo prazo</small>
+  </a>
+</section>
+
+<section class="panel">
+  <div class="section-heading">
+    <div><h2>Entradas e encerramentos por dia</h2><p class="muted">Últimos 60 dias. Clique numa barra para ver as notas daquele dia.</p></div>
+    <a class="button small" href="{% url 'gestao:analise' %}?grao=dia">Ver análise</a>
+  </div>
+  <div class="grafico" data-grafico="fluxo" role="img" aria-label="Gráfico de notas entrantes e encerradas por dia"></div>
+</section>
+
+<div class="grade-2">
+  <section class="panel table-panel">
+    <div class="section-heading pad"><div><h2>Carteira por estado</h2><p class="muted">Clique no estado para detalhar por regional.</p></div></div>
+    <div class="table-wrap">
+      <table class="tabela-num">
+        <thead><tr><th>Estado</th><th>Ativas</th><th>Entr. 30 d</th><th>Encer. 30 d</th><th>Vencidas</th><th>Valor</th></tr></thead>
+        <tbody>
+          {% for g in estados %}
+            <tr>
+              <td><a class="link-strong" href="{{ g.url_detalhar }}">{{ g.chave }}</a></td>
+              <td><a href="{{ g.url_notas }}">{{ g.ativas|milhar }}</a></td>
+              <td><a href="{{ g.url_entrantes }}">{{ g.entrantes|milhar }}</a></td>
+              <td><a href="{{ g.url_encerradas }}">{{ g.encerradas|milhar }}</a></td>
+              <td><a href="{{ g.url_vencidas }}">{{ g.vencidas|milhar }}</a> <small class="pct">{{ g.pct_vencidas|br_pct }}</small></td>
+              <td>{{ g.valor|brl_c }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot><tr><th>Total</th><th>{{ total_estados.ativas|milhar }}</th><th>{{ total_estados.entrantes|milhar }}</th><th>{{ total_estados.encerradas|milhar }}</th><th>{{ total_estados.vencidas|milhar }}</th><th>{{ total_estados.valor|brl_c }}</th></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel table-panel">
+    <div class="section-heading pad"><div><h2>Gerências com mais notas vencidas</h2><p class="muted">Atraso médio em relação ao fim desejado.</p></div><a class="button small" href="{% url 'gestao:prazos' %}">Ver prazos</a></div>
+    <div class="table-wrap">
+      <table class="tabela-num">
+        <thead><tr><th>Gerência</th><th>Ativas</th><th>Vencidas</th><th>% vencidas</th><th>Atraso médio</th></tr></thead>
+        <tbody>
+          {% for g in gerencias %}
+            <tr>
+              <td><a class="link-strong" href="{{ g.url_detalhar }}">{{ g.chave }}</a></td>
+              <td><a href="{{ g.url_notas }}">{{ g.ativas|milhar }}</a></td>
+              <td><a href="{{ g.url_vencidas }}">{{ g.vencidas|milhar }}</a></td>
+              <td><span class="barra-inline" aria-hidden="true"><i style="width: {{ g.pct_vencidas|largura }}"></i></span>{{ g.pct_vencidas|br_pct }}</td>
+              <td>{{ g.atraso_medio|dias }}</td>
+            </tr>
+          {% empty %}<tr><td colspan="5" class="empty-state">Nenhuma nota ativa.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel table-panel">
+    <div class="section-heading pad"><div><h2>Onde as notas ficam paradas</h2><p class="muted">Medidas com 5 ou mais notas, pelo tempo médio na medida atual.</p></div></div>
+    <div class="table-wrap">
+      <table class="tabela-num">
+        <thead><tr><th>Medida</th><th>Notas</th><th>Tempo médio</th><th>Medidas vencidas</th></tr></thead>
+        <tbody>
+          {% for m in gargalos %}
+            <tr>
+              <td class="texto"><a class="link-strong" href="{{ m.url_notas }}&amp;ordem=parada">{{ m.chave }}</a><small>{{ m.texto }}</small></td>
+              <td><a href="{{ m.url_notas }}">{{ m.ativas|milhar }}</a></td>
+              <td>{{ m.parada_media|dias }}</td>
+              <td><a href="{{ m.url_medidas_vencidas }}">{{ m.medidas_vencidas|milhar }}</a> <small class="pct">{{ m.pct_medidas_vencidas|br_pct }}</small></td>
+            </tr>
+          {% empty %}<tr><td colspan="4" class="empty-state">Nenhuma medida com 5 ou mais notas.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel table-panel">
+    <div class="section-heading pad"><div><h2>Notas com maior atraso</h2><p class="muted">Dias além do fim desejado.</p></div><a class="button small" href="{{ url_todas_atrasadas }}">Ver todas</a></div>
+    <div class="table-wrap">
+      <table class="tabela-notas">
+        <thead><tr><th>Nota</th><th>Gerência</th><th>Medida</th><th class="num">Atraso</th></tr></thead>
+        <tbody>
+          {% for x in atrasadas %}
+            <tr>
+              <td><a class="link-strong" href="{% url 'gestao:nota' x.nota %}">{{ x.nota }}</a><small>{{ x.estado }} · {{ x.regional }}</small></td>
+              <td>{{ x.gerencia }}</td>
+              <td>{{ x.medida }}<small>há {{ x.dias_na_medida|dias }}</small></td>
+              <td class="num"><span class="chip crit">{{ x.atraso_nota|dias }}</span></td>
+            </tr>
+          {% empty %}<tr><td colspan="4" class="empty-state">Nenhuma nota vencida.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+{% if sem_equivalencia %}
+  <p class="notice">{{ sem_equivalencia|milhar }} notas ativas estão com a gerência como veio do SQL, sem equivalência cadastrada
+    (ex.: OBRAS E MANUTENÇÃO, NÃO ATRIBUÍDO). Um administrador pode cadastrar a equivalência em
+    <em>Administração › Equivalências de gerência</em>.</p>
+{% endif %}
+{{ graficos|json_script:"dados-graficos" }}
+{% endif %}
+<script src="{% static 'vendor/echarts.min.js' %}" defer></script>
+<script src="{% static 'js/graficos.js' %}" defer></script>
+{% endblock %}

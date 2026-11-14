@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% load static utilidades %}
+{% block title %}Análise | Central de Incorporação{% endblock %}
+{% block content %}
+{% include "gestao/_topo.html" with titulo="Análise" subtitulo="Volume, fluxo e idade da carteira por estado, regional, gerência e medida." %}
+{% if sem_dados %}{% include "gestao/_vazio.html" %}{% else %}
+
+<section class="panel table-panel">
+  <div class="section-heading pad">
+    <div>
+      <h2>Carteira por {{ nivel_rotulo|lower }}</h2>
+      <p class="muted">Clique numa linha para descer um nível (estado › regional › gerência › medida). Os números abrem as notas.</p>
+    </div>
+    <div class="controles">
+      <nav class="segmentado" aria-label="Agrupar por">
+        {% for d, rotulo in dimensoes.items %}<a href="{{ links_nivel|obter:d }}" {% if d == nivel %}aria-current="true"{% endif %}>{{ rotulo }}</a>{% endfor %}
+      </nav>
+      <nav class="segmentado" aria-label="Período de entradas e encerramentos">
+        {% for p, rotulo in periodos.items %}<a href="{{ links_periodo|obter:p }}" {% if p == periodo %}aria-current="true"{% endif %}>{{ rotulo }}</a>{% endfor %}
+      </nav>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="tabela-num">
+      <thead>
+        <tr>
+          <th>{{ nivel_rotulo }}</th><th>Ativas</th><th>% carteira</th>
+          <th title="Notas criadas no período">Entrantes</th><th title="Notas finalizadas ou canceladas no período">Encerradas</th><th>Saldo</th>
+          <th>Notas vencidas</th><th>Medidas vencidas</th><th>Idade média</th><th>Tempo na medida</th><th>Valor orçado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in grupos %}
+          <tr>
+            <td class="texto"><a class="link-strong" href="{{ g.url_detalhar }}">{{ g.chave }}</a>{% if g.texto %}<small>{{ g.texto }}</small>{% endif %}</td>
+            <td><a href="{{ g.url_notas }}">{{ g.ativas|milhar }}</a></td>
+            <td><span class="barra-inline" aria-hidden="true"><i style="width: {{ g.pct_carteira|largura }}"></i></span>{{ g.pct_carteira|br_pct }}</td>
+            <td><a href="{{ g.url_entrantes }}">{{ g.entrantes|milhar }}</a></td>
+            <td><a href="{{ g.url_encerradas }}">{{ g.encerradas|milhar }}</a></td>
+            <td class="{% if g.saldo > 0 %}sobe{% elif g.saldo < 0 %}desce{% endif %}">{% if g.saldo > 0 %}+{% endif %}{{ g.saldo|milhar }}</td>
+            <td><a href="{{ g.url_vencidas }}">{{ g.vencidas|milhar }}</a> <small class="pct">{{ g.pct_vencidas|br_pct }}</small></td>
+            <td><a href="{{ g.url_medidas_vencidas }}">{{ g.medidas_vencidas|milhar }}</a> <small class="pct">{{ g.pct_medidas_vencidas|br_pct }}</small></td>
+            <td>{{ g.idade_media|dias }}</td>
+            <td>{{ g.parada_media|dias }}</td>
+            <td>{{ g.valor|brl_c }}</td>
+          </tr>
+        {% empty %}<tr><td colspan="11" class="empty-state">Nenhuma nota com esses filtros.</td></tr>{% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th>Total</th><th>{{ total.ativas|milhar }}</th><th>100%</th><th>{{ total.entrantes|milhar }}</th><th>{{ total.encerradas|milhar }}</th>
+          <th>{% if total.saldo > 0 %}+{% endif %}{{ total.saldo|milhar }}</th><th>{{ total.vencidas|milhar }} <small class="pct">{{ total.pct_vencidas|br_pct }}</small></th>
+          <th>{{ total.medidas_vencidas|milhar }}</th><th>{{ total.idade_media|dias }}</th><th>{{ total.parada_media|dias }}</th><th>{{ total.valor|brl_c }}</th>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  <p class="muted nota-rodape">Saldo = entrantes − encerradas no período. Positivo: a carteira cresceu.</p>
+</section>
+
+<section class="panel">
+  <div class="section-heading">
+    <div>
+      <h2>Entrantes × encerradas</h2>
+      <p class="muted">{% if grao == "dia" %}Por dia, últimos 60 dias{% else %}Por mês, últimos 24 meses{% endif %}. Clique numa barra para ver as notas.</p>
+    </div>
+    <nav class="segmentado" aria-label="Granularidade">
+      <a href="{{ links_grao.dia }}" {% if grao == "dia" %}aria-current="true"{% endif %}>Por dia</a>
+      <a href="{{ links_grao.mes }}" {% if grao == "mes" %}aria-current="true"{% endif %}>Por mês</a>
+    </nav>
+  </div>
+  <div class="grafico" data-grafico="fluxo" role="img" aria-label="Gráfico de notas entrantes e encerradas"></div>
+</section>
+
+<div class="grade-2">
+  <section class="panel">
+    <div class="section-heading"><div><h2>Idade da carteira</h2><p class="muted">Notas ativas por tempo desde a criação. Idade média {{ r.idade_media|dias }}.</p></div></div>
+    <div class="grafico baixo" data-grafico="idade" role="img" aria-label="Notas ativas por faixa de idade"></div>
+  </section>
+
+  <section class="panel table-panel">
+    <div class="section-heading pad"><div><h2>Gerência × estado</h2><p class="muted">Notas ativas. A cor indica a concentração.</p></div></div>
+    <div class="table-wrap">
+      <table class="tabela-num matriz-calor">
+        <thead><tr><th>Gerência</th>{% for c in matriz.colunas %}<th>{{ c }}</th>{% endfor %}<th>Total</th></tr></thead>
+        <tbody>
+          {% for lin in matriz.linhas %}
+            <tr>
+              <td><a class="link-strong" href="{{ lin.url }}">{{ lin.chave }}</a></td>
+              {% for c in lin.celulas %}
+                <td style="--calor: {{ c.intensidade|largura }}">{% if c.valor %}<a href="{{ c.url }}">{{ c.valor|milhar }}</a>{% else %}<span class="zero">·</span>{% endif %}</td>
+              {% endfor %}
+              <td><strong>{{ lin.total|milhar }}</strong></td>
+            </tr>
+          {% empty %}<tr><td colspan="99" class="empty-state">Nenhuma nota ativa.</td></tr>{% endfor %}
+        </tbody>
+        <tfoot><tr><th>Total</th>{% for t in matriz.totais %}<th>{{ t|milhar }}</th>{% endfor %}<th>{{ matriz.total|milhar }}</th></tr></tfoot>
+      </table>
+    </div>
+  </section>
+</div>
+{{ graficos|json_script:"dados-graficos" }}
+{% endif %}
+<script src="{% static 'vendor/echarts.min.js' %}" defer></script>
+<script src="{% static 'js/graficos.js' %}" defer></script>
+{% endblock %}

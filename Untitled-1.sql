@@ -1,0 +1,1047 @@
+/* =============================================================================
+   SB_TATICO_PA.OBRAS.TB_NOTAS_IR_CORPORATIVO
+   Base corporativa de notas IR (PA, MA, PI, AL, RS, AP)
+   -----------------------------------------------------------------------------
+   Versao refatorada. Os 85 nomes de coluna da saida sao IDENTICOS a versao
+   anterior (requisito do Power BI).
+
+   O QUE MUDOU (performance / legibilidade, sem mudar o resultado)
+   -----------------------------------------------------------------------------
+   1. Fontes com colunas explicitas no lugar de SELECT 'XX' AS ESTADO, *.
+      Como o Snowflake e colunar, isso reduz drasticamente os bytes lidos.
+      Tambem permitiu trocar UNION ALL BY NAME por UNION ALL simples.
+   2. A janela ROW_NUMBER das medidas (antes MEDIDAS_FILTRADAS) rodava sobre a
+      tabela MEDIDAS_NOTAS_SERVICOS inteira dos 6 estados. Agora roda somente
+      sobre as medidas de notas IR (EXISTS) e ja corta em GRP <= 2.
+   3. MEDIDAS_TOP + MEDIDAS_ANTERIOR eram dois joins sobre a mesma janela.
+      Viraram uma unica CTE pivotada (MEDIDAS_ATUAL_ANTERIOR): -1 join, -1 scan.
+   4. CLIENTE_LIGADO agregava TODAS as notas de medidas. Agora e restrita ao
+      escopo usado (notas IR + notas OC/LN das instalacoes das notas IR).
+   5. A regra de "ligacao" (LIGAREA 0024/0025, LIGINSTA 0001/0002, COMUCONC
+      0001) estava escrita 2x. Virou a flag IS_LIGACAO, calculada uma vez.
+   6. ELETROPROJ: o REGEXP_SUBSTR era avaliado 2x e as linhas sem nota CCS no
+      texto da obra nunca casam no join final; agora sao descartadas antes.
+   7. Removido o join LEFT JOIN SRC_TAB_CODES_MEDIDAS tcm: tinha exatamente as
+      mesmas chaves do join tab4 e nenhuma coluna sua ia para a saida.
+   8. Removidas de VINCULOS as colunas calculadas e nunca usadas:
+      INSTALACAO, TEXTO_BREVE_VINCULADA, DATA_ENCERRAMENTO_VINCULADA.
+   9. LTRIM(NOTA, '0') calculado uma vez por CTE (coluna NOTA_KEY).
+      ATENCAO: o join das medidas continua pela NOTA BRUTA (com zeros), como na
+      versao original -- isso foi mantido de proposito para nao mudar o volume.
+  10. QTD_CLIENTES_LIGADOS e QTD_NOTAS_VINCULADAS_LIGADAS eram a MESMA
+      expressao. Agora e calculada uma vez e exposta nos dois nomes.
+      TEM_VINCULADA_LIGADA passou a derivar desse mesmo contador.
+
+   UNICA MUDANCA DE COMPORTAMENTO
+   -----------------------------------------------------------------------------
+   VINCULOS agora tem no maximo uma linha por (nota IR, nota vinculada).
+   Antes, se a mesma nota OC/LN aparecia em mais de uma instalacao da nota IR,
+   ela se repetia dentro de NOTAS_VINCULADAS e NOTAS_VINCULADAS_LIGADAS.
+   As contagens nao mudam (ja usavam COUNT DISTINCT); so as duas listas de
+   texto deixam de repetir a mesma nota. Para voltar ao comportamento antigo,
+   remova o QUALIFY marcado com [DEDUP] na CTE VINCULOS.
+
+   PENDENCIAS QUE PRECISAM DA SUA DECISAO (rode VALIDACAO_NOTAS_IR.sql)
+   -----------------------------------------------------------------------------
+   - OBRAS_FISCALIZACAO (fsb): join por COD_NOTA sem estado e sem deduplicacao.
+   - DEMANDA_INTERNA (di): join por fsb.COD_NOTA; se nao houver fiscalizacao,
+     a demanda interna nunca aparece, mesmo existindo.
+   - TEXTO_OBS_MEDIDAS (texto_ant): join por ESTADO + NOTA, sem a MEDIDA.
+   - ANEXOIV_PENDENTES_BASE (mf) e TAB_CADASTRO (cad): join 1:1 presumido.
+   Qualquer um desses, com mais de uma linha por chave, multiplica linhas.
+   Mantive todos exatamente como estavam para nao mexer nos numeros do BI.
+   ============================================================================= */
+
+/* Alternativas de materializacao (trocar apenas esta primeira linha):
+     CREATE OR REPLACE VIEW SB_TATICO_PA.OBRAS.VW_NOTAS_IR_CORPORATIVO AS
+     CREATE OR REPLACE TRANSIENT TABLE SB_TATICO_PA.OBRAS.TB_NOTAS_IR_CORPORATIVO AS
+     CREATE OR REPLACE DYNAMIC TABLE SB_TATICO_PA.OBRAS.DT_NOTAS_IR_CORPORATIVO
+         TARGET_LAG = '1 hour' WAREHOUSE = <SEU_WH> AS
+*/
+
+
+WITH
+
+/* =============================================================================
+   0. FONTES POR ESTADO -- colunas explicitas
+   ============================================================================= */
+SRC_NOTAS_SERVICOS AS (
+    SELECT 'PA' AS ESTADO,
+           NOTA, TIPO_NOTA, INSTALACAO, TEXTO_BREVE, GRUPO_CODES, CODIFICACAO,
+           STATUS_CCS, CENTRO_TRABALHO, AREA_ESTRUT_REGIONAL, CARTEIRA_CLIENTE,
+           DATA_CRIACAO, DATA_ENCERRAMENTO, DATA_ALTERACAO, INICIO_AVARIA,
+           INICIO_DESEJADO, FIM_DESEJADO
+    FROM EQTLINFO_PRD.EQTL_PA.NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           NOTA, TIPO_NOTA, INSTALACAO, TEXTO_BREVE, GRUPO_CODES, CODIFICACAO,
+           STATUS_CCS, CENTRO_TRABALHO, AREA_ESTRUT_REGIONAL, CARTEIRA_CLIENTE,
+           DATA_CRIACAO, DATA_ENCERRAMENTO, DATA_ALTERACAO, INICIO_AVARIA,
+           INICIO_DESEJADO, FIM_DESEJADO
+    FROM EQTLINFO_PRD.EQTL_MA.NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           NOTA, TIPO_NOTA, INSTALACAO, TEXTO_BREVE, GRUPO_CODES, CODIFICACAO,
+           STATUS_CCS, CENTRO_TRABALHO, AREA_ESTRUT_REGIONAL, CARTEIRA_CLIENTE,
+           DATA_CRIACAO, DATA_ENCERRAMENTO, DATA_ALTERACAO, INICIO_AVARIA,
+           INICIO_DESEJADO, FIM_DESEJADO
+    FROM EQTLINFO_PRD.EQTL_PI.NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           NOTA, TIPO_NOTA, INSTALACAO, TEXTO_BREVE, GRUPO_CODES, CODIFICACAO,
+           STATUS_CCS, CENTRO_TRABALHO, AREA_ESTRUT_REGIONAL, CARTEIRA_CLIENTE,
+           DATA_CRIACAO, DATA_ENCERRAMENTO, DATA_ALTERACAO, INICIO_AVARIA,
+           INICIO_DESEJADO, FIM_DESEJADO
+    FROM EQTLINFO_PRD.EQTL_AL.NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           NOTA, TIPO_NOTA, INSTALACAO, TEXTO_BREVE, GRUPO_CODES, CODIFICACAO,
+           STATUS_CCS, CENTRO_TRABALHO, AREA_ESTRUT_REGIONAL, CARTEIRA_CLIENTE,
+           DATA_CRIACAO, DATA_ENCERRAMENTO, DATA_ALTERACAO, INICIO_AVARIA,
+           INICIO_DESEJADO, FIM_DESEJADO
+    FROM EQTLINFO_PRD.EQTL_RS.NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           NOTA, TIPO_NOTA, INSTALACAO, TEXTO_BREVE, GRUPO_CODES, CODIFICACAO,
+           STATUS_CCS, CENTRO_TRABALHO, AREA_ESTRUT_REGIONAL, CARTEIRA_CLIENTE,
+           DATA_CRIACAO, DATA_ENCERRAMENTO, DATA_ALTERACAO, INICIO_AVARIA,
+           INICIO_DESEJADO, FIM_DESEJADO
+    FROM EQTLINFO_PRD.EQTL_AP.NOTAS_SERVICOS
+),
+
+SRC_MEDIDAS_NOTAS_SERVICOS AS (
+    SELECT 'PA' AS ESTADO,
+           NOTA, MEDIDA, GRUPO_MEDIDA, CODIGO_MEDIDA, DATA_CRIACAO_MEDIDA,
+           DATA_CONCLUSAO_MEDIDA, DATA_DADOS, DATA_ENCERRAMENTO_NOTA, CONCLUIDO_POR,
+           INICIO_PROGRAMADO_MEDIDA, FIM_PROGRAMADO_MEDIDA
+    FROM EQTLINFO_PRD.EQTL_PA.MEDIDAS_NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           NOTA, MEDIDA, GRUPO_MEDIDA, CODIGO_MEDIDA, DATA_CRIACAO_MEDIDA,
+           DATA_CONCLUSAO_MEDIDA, DATA_DADOS, DATA_ENCERRAMENTO_NOTA, CONCLUIDO_POR,
+           INICIO_PROGRAMADO_MEDIDA, FIM_PROGRAMADO_MEDIDA
+    FROM EQTLINFO_PRD.EQTL_MA.MEDIDAS_NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           NOTA, MEDIDA, GRUPO_MEDIDA, CODIGO_MEDIDA, DATA_CRIACAO_MEDIDA,
+           DATA_CONCLUSAO_MEDIDA, DATA_DADOS, DATA_ENCERRAMENTO_NOTA, CONCLUIDO_POR,
+           INICIO_PROGRAMADO_MEDIDA, FIM_PROGRAMADO_MEDIDA
+    FROM EQTLINFO_PRD.EQTL_PI.MEDIDAS_NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           NOTA, MEDIDA, GRUPO_MEDIDA, CODIGO_MEDIDA, DATA_CRIACAO_MEDIDA,
+           DATA_CONCLUSAO_MEDIDA, DATA_DADOS, DATA_ENCERRAMENTO_NOTA, CONCLUIDO_POR,
+           INICIO_PROGRAMADO_MEDIDA, FIM_PROGRAMADO_MEDIDA
+    FROM EQTLINFO_PRD.EQTL_AL.MEDIDAS_NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           NOTA, MEDIDA, GRUPO_MEDIDA, CODIGO_MEDIDA, DATA_CRIACAO_MEDIDA,
+           DATA_CONCLUSAO_MEDIDA, DATA_DADOS, DATA_ENCERRAMENTO_NOTA, CONCLUIDO_POR,
+           INICIO_PROGRAMADO_MEDIDA, FIM_PROGRAMADO_MEDIDA
+    FROM EQTLINFO_PRD.EQTL_RS.MEDIDAS_NOTAS_SERVICOS
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           NOTA, MEDIDA, GRUPO_MEDIDA, CODIGO_MEDIDA, DATA_CRIACAO_MEDIDA,
+           DATA_CONCLUSAO_MEDIDA, DATA_DADOS, DATA_ENCERRAMENTO_NOTA, CONCLUIDO_POR,
+           INICIO_PROGRAMADO_MEDIDA, FIM_PROGRAMADO_MEDIDA
+    FROM EQTLINFO_PRD.EQTL_AP.MEDIDAS_NOTAS_SERVICOS
+),
+
+SRC_TAB_CADASTRO AS (
+    SELECT 'PA' AS ESTADO,
+           INSTALACAO, CONTA_CONTRATO, NOME, ENDERECO, BAIRRO, MUNICIPIO, REGIONAL,
+           PERIMETRO, LATITUDE, LONGITUDE
+    FROM EQTLINFO_PRD.EQTL_PA.TAB_CADASTRO
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           INSTALACAO, CONTA_CONTRATO, NOME, ENDERECO, BAIRRO, MUNICIPIO, REGIONAL,
+           PERIMETRO, LATITUDE, LONGITUDE
+    FROM EQTLINFO_PRD.EQTL_MA.TAB_CADASTRO
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           INSTALACAO, CONTA_CONTRATO, NOME, ENDERECO, BAIRRO, MUNICIPIO, REGIONAL,
+           PERIMETRO, LATITUDE, LONGITUDE
+    FROM EQTLINFO_PRD.EQTL_PI.TAB_CADASTRO
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           INSTALACAO, CONTA_CONTRATO, NOME, ENDERECO, BAIRRO, MUNICIPIO, REGIONAL,
+           PERIMETRO, LATITUDE, LONGITUDE
+    FROM EQTLINFO_PRD.EQTL_AL.TAB_CADASTRO
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           INSTALACAO, CONTA_CONTRATO, NOME, ENDERECO, BAIRRO, MUNICIPIO, REGIONAL,
+           PERIMETRO, LATITUDE, LONGITUDE
+    FROM EQTLINFO_PRD.EQTL_RS.TAB_CADASTRO
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           INSTALACAO, CONTA_CONTRATO, NOME, ENDERECO, BAIRRO, MUNICIPIO, REGIONAL,
+           PERIMETRO, LATITUDE, LONGITUDE
+    FROM EQTLINFO_PRD.EQTL_AP.TAB_CADASTRO
+),
+
+SRC_TAB_CODES_MEDIDAS AS (
+    SELECT 'PA' AS ESTADO,
+           GRUPO_CODIGO, CODIGO, TEXTO_BREVE_CODIGO
+    FROM EQTLINFO_PRD.EQTL_PA.TAB_CODES_MEDIDAS
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           GRUPO_CODIGO, CODIGO, TEXTO_BREVE_CODIGO
+    FROM EQTLINFO_PRD.EQTL_MA.TAB_CODES_MEDIDAS
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           GRUPO_CODIGO, CODIGO, TEXTO_BREVE_CODIGO
+    FROM EQTLINFO_PRD.EQTL_PI.TAB_CODES_MEDIDAS
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           GRUPO_CODIGO, CODIGO, TEXTO_BREVE_CODIGO
+    FROM EQTLINFO_PRD.EQTL_AL.TAB_CODES_MEDIDAS
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           GRUPO_CODIGO, CODIGO, TEXTO_BREVE_CODIGO
+    FROM EQTLINFO_PRD.EQTL_RS.TAB_CODES_MEDIDAS
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           GRUPO_CODIGO, CODIGO, TEXTO_BREVE_CODIGO
+    FROM EQTLINFO_PRD.EQTL_AP.TAB_CODES_MEDIDAS
+),
+
+SRC_TAB_GRPCODES_MEDIDAS AS (
+    SELECT 'PA' AS ESTADO,
+           GRUPO_CODIGO, TEXTO_BREVE_GRUPO_CODIGO
+    FROM EQTLINFO_PRD.EQTL_PA.TAB_GRPCODES_MEDIDAS
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           GRUPO_CODIGO, TEXTO_BREVE_GRUPO_CODIGO
+    FROM EQTLINFO_PRD.EQTL_MA.TAB_GRPCODES_MEDIDAS
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           GRUPO_CODIGO, TEXTO_BREVE_GRUPO_CODIGO
+    FROM EQTLINFO_PRD.EQTL_PI.TAB_GRPCODES_MEDIDAS
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           GRUPO_CODIGO, TEXTO_BREVE_GRUPO_CODIGO
+    FROM EQTLINFO_PRD.EQTL_AL.TAB_GRPCODES_MEDIDAS
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           GRUPO_CODIGO, TEXTO_BREVE_GRUPO_CODIGO
+    FROM EQTLINFO_PRD.EQTL_RS.TAB_GRPCODES_MEDIDAS
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           GRUPO_CODIGO, TEXTO_BREVE_GRUPO_CODIGO
+    FROM EQTLINFO_PRD.EQTL_AP.TAB_GRPCODES_MEDIDAS
+),
+
+SRC_TEXTO_OBS_MEDIDAS AS (
+    SELECT 'PA' AS ESTADO,
+           NOTA, TEXTO
+    FROM EQTLINFO_PRD.EQTL_PA.TEXTO_OBS_MEDIDAS
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           NOTA, TEXTO
+    FROM EQTLINFO_PRD.EQTL_MA.TEXTO_OBS_MEDIDAS
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           NOTA, TEXTO
+    FROM EQTLINFO_PRD.EQTL_PI.TEXTO_OBS_MEDIDAS
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           NOTA, TEXTO
+    FROM EQTLINFO_PRD.EQTL_AL.TEXTO_OBS_MEDIDAS
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           NOTA, TEXTO
+    FROM EQTLINFO_PRD.EQTL_RS.TEXTO_OBS_MEDIDAS
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           NOTA, TEXTO
+    FROM EQTLINFO_PRD.EQTL_AP.TEXTO_OBS_MEDIDAS
+),
+
+SRC_EP_SOLICITACAO_INVESTIMENTO AS (
+    SELECT 'PA' AS ESTADO,
+           SLI_ID, SLI_NOTA_SAP, SLI_DESC_OBRA, SLI_SOLICITANTE, SLI_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_PA.SOLICITACAO_INVESTIMENTO
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           SLI_ID, SLI_NOTA_SAP, SLI_DESC_OBRA, SLI_SOLICITANTE, SLI_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_MA.SOLICITACAO_INVESTIMENTO
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           SLI_ID, SLI_NOTA_SAP, SLI_DESC_OBRA, SLI_SOLICITANTE, SLI_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_PI.SOLICITACAO_INVESTIMENTO
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           SLI_ID, SLI_NOTA_SAP, SLI_DESC_OBRA, SLI_SOLICITANTE, SLI_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_AL.SOLICITACAO_INVESTIMENTO
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           SLI_ID, SLI_NOTA_SAP, SLI_DESC_OBRA, SLI_SOLICITANTE, SLI_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_RS.SOLICITACAO_INVESTIMENTO
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           SLI_ID, SLI_NOTA_SAP, SLI_DESC_OBRA, SLI_SOLICITANTE, SLI_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_AP.SOLICITACAO_INVESTIMENTO
+),
+
+SRC_EP_STATUS_NOTA AS (
+    SELECT 'PA' AS ESTADO,
+           ID_STATUS_NOTA, DESC_STATUS_NOTA, SAP_STATUS_NOTA, PROJ_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_PA.STATUS_NOTA
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           ID_STATUS_NOTA, DESC_STATUS_NOTA, SAP_STATUS_NOTA, PROJ_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_MA.STATUS_NOTA
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           ID_STATUS_NOTA, DESC_STATUS_NOTA, SAP_STATUS_NOTA, PROJ_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_PI.STATUS_NOTA
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           ID_STATUS_NOTA, DESC_STATUS_NOTA, SAP_STATUS_NOTA, PROJ_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_AL.STATUS_NOTA
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           ID_STATUS_NOTA, DESC_STATUS_NOTA, SAP_STATUS_NOTA, PROJ_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_RS.STATUS_NOTA
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           ID_STATUS_NOTA, DESC_STATUS_NOTA, SAP_STATUS_NOTA, PROJ_STATUS_NOTA
+    FROM EQTLINFO_RAW.ELETROPROJ_AP.STATUS_NOTA
+),
+
+SRC_EP_DADOS_ORCAMENTO AS (
+    SELECT 'PA' AS ESTADO,
+           SLI_ID, VL_MATERIAL_TOTAL, VL_MO_TOTAL, VL_TOTAL_ORCAMENTO
+    FROM EQTLINFO_RAW.ELETROPROJ_PA.DADOS_ORCAMENTO
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           SLI_ID, VL_MATERIAL_TOTAL, VL_MO_TOTAL, VL_TOTAL_ORCAMENTO
+    FROM EQTLINFO_RAW.ELETROPROJ_MA.DADOS_ORCAMENTO
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           SLI_ID, VL_MATERIAL_TOTAL, VL_MO_TOTAL, VL_TOTAL_ORCAMENTO
+    FROM EQTLINFO_RAW.ELETROPROJ_PI.DADOS_ORCAMENTO
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           SLI_ID, VL_MATERIAL_TOTAL, VL_MO_TOTAL, VL_TOTAL_ORCAMENTO
+    FROM EQTLINFO_RAW.ELETROPROJ_AL.DADOS_ORCAMENTO
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           SLI_ID, VL_MATERIAL_TOTAL, VL_MO_TOTAL, VL_TOTAL_ORCAMENTO
+    FROM EQTLINFO_RAW.ELETROPROJ_RS.DADOS_ORCAMENTO
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           SLI_ID, VL_MATERIAL_TOTAL, VL_MO_TOTAL, VL_TOTAL_ORCAMENTO
+    FROM EQTLINFO_RAW.ELETROPROJ_AP.DADOS_ORCAMENTO
+),
+
+SRC_EP_DADOS_CONSTRUCAO AS (
+    SELECT 'PA' AS ESTADO,
+           SLI_ID, ELEMENTO_PEP_NIVEL3
+    FROM EQTLINFO_RAW.ELETROPROJ_PA.DADOS_CONSTRUCAO
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           SLI_ID, ELEMENTO_PEP_NIVEL3
+    FROM EQTLINFO_RAW.ELETROPROJ_MA.DADOS_CONSTRUCAO
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           SLI_ID, ELEMENTO_PEP_NIVEL3
+    FROM EQTLINFO_RAW.ELETROPROJ_PI.DADOS_CONSTRUCAO
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           SLI_ID, ELEMENTO_PEP_NIVEL3
+    FROM EQTLINFO_RAW.ELETROPROJ_AL.DADOS_CONSTRUCAO
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           SLI_ID, ELEMENTO_PEP_NIVEL3
+    FROM EQTLINFO_RAW.ELETROPROJ_RS.DADOS_CONSTRUCAO
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           SLI_ID, ELEMENTO_PEP_NIVEL3
+    FROM EQTLINFO_RAW.ELETROPROJ_AP.DADOS_CONSTRUCAO
+),
+
+SRC_EP_PROJETO_RETORNO_SAP AS (
+    SELECT 'PA' AS ESTADO,
+           NOTA, PEP_NV_4
+    FROM EQTLINFO_RAW.ELETROPROJ_PA.PROJETO_RETORNO_REQUISICAO_SAP
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           NOTA, PEP_NV_4
+    FROM EQTLINFO_RAW.ELETROPROJ_MA.PROJETO_RETORNO_REQUISICAO_SAP
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           NOTA, PEP_NV_4
+    FROM EQTLINFO_RAW.ELETROPROJ_PI.PROJETO_RETORNO_REQUISICAO_SAP
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           NOTA, PEP_NV_4
+    FROM EQTLINFO_RAW.ELETROPROJ_AL.PROJETO_RETORNO_REQUISICAO_SAP
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           NOTA, PEP_NV_4
+    FROM EQTLINFO_RAW.ELETROPROJ_RS.PROJETO_RETORNO_REQUISICAO_SAP
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           NOTA, PEP_NV_4
+    FROM EQTLINFO_RAW.ELETROPROJ_AP.PROJETO_RETORNO_REQUISICAO_SAP
+),
+
+SRC_ANEXOIV_PENDENTES_BASE AS (
+    SELECT 'PA' AS ESTADO,
+           NOTA, VALOR_MULTA_EUSD_M, PRAZO
+    FROM SB_ATENDIMENTO.EQTL_PA.ANEXOIV_PENDENTES_BASE
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           NOTA, VALOR_MULTA_EUSD_M, PRAZO
+    FROM SB_ATENDIMENTO.EQTL_MA.ANEXOIV_PENDENTES_BASE
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           NOTA, VALOR_MULTA_EUSD_M, PRAZO
+    FROM SB_ATENDIMENTO.EQTL_PI.ANEXOIV_PENDENTES_BASE
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           NOTA, VALOR_MULTA_EUSD_M, PRAZO
+    FROM SB_ATENDIMENTO.EQTL_AL.ANEXOIV_PENDENTES_BASE
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           NOTA, VALOR_MULTA_EUSD_M, PRAZO
+    FROM SB_ATENDIMENTO.EQTL_RS.ANEXOIV_PENDENTES_BASE
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           NOTA, VALOR_MULTA_EUSD_M, PRAZO
+    FROM SB_ATENDIMENTO.EQTL_AP.ANEXOIV_PENDENTES_BASE
+),
+
+SRC_TAB_CENTRO_TRABALHO_GERENCIA AS (
+    SELECT 'PA' AS ESTADO,
+           CENTRO_TRABALHO, GERENCIA
+    FROM SB_ATENDIMENTO.EQTL_PA.TAB_CENTRO_TRABALHO_GERENCIA
+    UNION ALL
+    SELECT 'MA' AS ESTADO,
+           CENTRO_TRABALHO, GERENCIA
+    FROM SB_ATENDIMENTO.EQTL_MA.TAB_CENTRO_TRABALHO_GERENCIA
+    UNION ALL
+    SELECT 'PI' AS ESTADO,
+           CENTRO_TRABALHO, GERENCIA
+    FROM SB_ATENDIMENTO.EQTL_PI.TAB_CENTRO_TRABALHO_GERENCIA
+    UNION ALL
+    SELECT 'AL' AS ESTADO,
+           CENTRO_TRABALHO, GERENCIA
+    FROM SB_ATENDIMENTO.EQTL_AL.TAB_CENTRO_TRABALHO_GERENCIA
+    UNION ALL
+    SELECT 'RS' AS ESTADO,
+           CENTRO_TRABALHO, GERENCIA
+    FROM SB_ATENDIMENTO.EQTL_RS.TAB_CENTRO_TRABALHO_GERENCIA
+    UNION ALL
+    SELECT 'AP' AS ESTADO,
+           CENTRO_TRABALHO, GERENCIA
+    FROM SB_ATENDIMENTO.EQTL_AP.TAB_CENTRO_TRABALHO_GERENCIA
+),
+/* -----------------------------------------------------------------------------
+   0.1 FONTES SISCO (corporativas, nao particionadas por estado)
+   ----------------------------------------------------------------------------- */
+SRC_FISCALIZACAO AS (
+    SELECT
+        COD_NOTA,
+        STATUS_SISCO_FISCALIZACAO_ID,
+        DATA_AGENDAMENTO,
+        DATA_ATRIBUICAO_FISCAL,
+        DATA_DA_FISCALIZACAO,
+        DATA_PREVISAO_ENTREGA,
+        DATA_SOLICITACAO,
+        DURACAO_DIAS,
+        DATA_DEVOLUCAO,
+        DATA_CONCLUSAO,
+        DATA_ENTREGA_RELATORIO_CAMPO
+    FROM EQTLINFO_RAW.SISCO.OBRAS_FISCALIZACAO
+),
+
+SRC_DEMANDA_INTERNA AS (
+    SELECT
+        NOTA,
+        SITUACAO_DEM_ID,
+        DATA_ABERTURA_SOLIC,
+        DESCRICAO_SOLICITACAO,
+        NOME_ANALISTA_SOLIC
+    FROM EQTLINFO_RAW.SISCO.DEMANDA_INTERNA
+),
+
+SRC_STATUS_SISCO AS (
+    SELECT STATUS_ID, DESCRICAO
+    FROM EQTLINFO_RAW.SISCO.STATUS_SISCO
+),
+
+/* =============================================================================
+   1. NOTAS IR -- filtro antecipado
+      NOTA     = chave bruta  (join de medidas, como na versao original)
+      NOTA_KEY = LTRIM(NOTA, '0') (saida e todos os demais joins)
+   ============================================================================= */
+NOTAS_IR_BASE AS (
+    SELECT
+        ESTADO,
+        NOTA,
+        LTRIM(NOTA, '0') AS NOTA_KEY,
+        TIPO_NOTA,
+        INSTALACAO,
+        TEXTO_BREVE,
+        GRUPO_CODES,
+        CODIFICACAO,
+        STATUS_CCS,
+        CENTRO_TRABALHO,
+        AREA_ESTRUT_REGIONAL,
+        CARTEIRA_CLIENTE,
+        DATA_CRIACAO,
+        INICIO_DESEJADO,
+        FIM_DESEJADO,
+        INICIO_AVARIA,
+        DATA_ALTERACAO
+    FROM SRC_NOTAS_SERVICOS
+    WHERE TIPO_NOTA = 'IR'
+),
+
+INSTALACOES_IR AS (
+    SELECT DISTINCT ESTADO, INSTALACAO
+    FROM NOTAS_IR_BASE
+),
+
+NOTAS_IR_INSTALACAO AS (
+    SELECT DISTINCT
+        ESTADO,
+        NOTA_KEY AS NOTA_IR,
+        INSTALACAO
+    FROM NOTAS_IR_BASE
+),
+
+/* =============================================================================
+   2. MEDIDAS DAS NOTAS IR -- medida atual (GRP 1) e anterior (GRP 2)
+      A janela roda apenas sobre medidas de notas IR.
+   ============================================================================= */
+MEDIDAS_NOTAS_IR AS (
+    SELECT
+        m.ESTADO,
+        m.NOTA,
+        m.GRUPO_MEDIDA,
+        m.CODIGO_MEDIDA,
+        m.DATA_ENCERRAMENTO_NOTA,
+        m.DATA_CRIACAO_MEDIDA,
+        m.DATA_CONCLUSAO_MEDIDA,
+        m.CONCLUIDO_POR,
+        m.INICIO_PROGRAMADO_MEDIDA,
+        m.FIM_PROGRAMADO_MEDIDA,
+        ROW_NUMBER() OVER (
+            PARTITION BY m.ESTADO, m.NOTA
+            ORDER BY
+                COALESCE(
+                    m.DATA_CONCLUSAO_MEDIDA,
+                    m.DATA_CRIACAO_MEDIDA,
+                    m.DATA_DADOS
+                ) DESC,
+                m.MEDIDA DESC
+        ) AS GRP
+    FROM SRC_MEDIDAS_NOTAS_SERVICOS m
+    WHERE EXISTS (
+        SELECT 1
+        FROM NOTAS_IR_BASE ir
+        WHERE ir.ESTADO = m.ESTADO
+          AND ir.NOTA   = m.NOTA
+    )
+    QUALIFY GRP <= 2
+),
+
+MEDIDAS_ATUAL_ANTERIOR AS (
+    SELECT
+        ESTADO,
+        NOTA,
+
+        /* medida atual */
+        MAX(CASE WHEN GRP = 1 THEN GRUPO_MEDIDA             END) AS GRUPO_MEDIDA_ATUAL,
+        MAX(CASE WHEN GRP = 1 THEN CODIGO_MEDIDA            END) AS CODIGO_MEDIDA_ATUAL,
+        MAX(CASE WHEN GRP = 1 THEN DATA_ENCERRAMENTO_NOTA   END) AS DATA_ENCERRAMENTO_NOTA,
+        MAX(CASE WHEN GRP = 1 THEN DATA_CRIACAO_MEDIDA      END) AS DATA_CRIACAO_MEDIDA,
+        MAX(CASE WHEN GRP = 1 THEN CONCLUIDO_POR            END) AS CONCLUIDO_POR,
+        MAX(CASE WHEN GRP = 1 THEN DATA_CONCLUSAO_MEDIDA    END) AS DATA_CONCLUSAO_MEDIDA,
+        MAX(CASE WHEN GRP = 1 THEN INICIO_PROGRAMADO_MEDIDA END) AS INICIO_PROGRAMADO_MEDIDA,
+        MAX(CASE WHEN GRP = 1 THEN FIM_PROGRAMADO_MEDIDA    END) AS FIM_PROGRAMADO_MEDIDA,
+
+        /* medida anterior (NULL quando a nota tem uma unica medida) */
+        MAX(CASE WHEN GRP = 2 THEN GRUPO_MEDIDA  END) AS GRUPO_MEDIDA_ANTERIOR,
+        MAX(CASE WHEN GRP = 2 THEN CODIGO_MEDIDA END) AS CODIGO_MEDIDA_ANTERIOR,
+        MAX(CASE WHEN GRP = 2 THEN NOTA          END) AS NOTA_MEDIDA_ANTERIOR
+    FROM MEDIDAS_NOTAS_IR
+    GROUP BY ESTADO, NOTA
+),
+
+/* =============================================================================
+   3. NOTAS OC/LN DAS INSTALACOES DAS NOTAS IR
+      Uma linha por (estado, nota, instalacao)
+   ============================================================================= */
+NOTAS_OC_LN AS (
+    SELECT
+        n.ESTADO,
+        LTRIM(n.NOTA, '0') AS NOTA,
+        n.INSTALACAO,
+        n.TIPO_NOTA,
+        n.STATUS_CCS,
+        n.DATA_CRIACAO,
+        n.INICIO_AVARIA
+    FROM SRC_NOTAS_SERVICOS n
+    WHERE n.TIPO_NOTA IN ('OC', 'LN')
+      AND EXISTS (
+          SELECT 1
+          FROM INSTALACOES_IR i
+          WHERE i.ESTADO     = n.ESTADO
+            AND i.INSTALACAO = n.INSTALACAO
+      )
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY n.ESTADO, LTRIM(n.NOTA, '0'), n.INSTALACAO
+        ORDER BY
+            n.DATA_CRIACAO       DESC NULLS LAST,
+            n.DATA_ENCERRAMENTO  DESC NULLS LAST
+    ) = 1
+),
+
+/* =============================================================================
+   4. LIGACAO / ENERGIZACAO
+      Escopo = notas IR + notas OC/LN das instalacoes das notas IR.
+      A regra de ligacao fica em um unico lugar (IS_LIGACAO).
+   ============================================================================= */
+NOTAS_ESCOPO_LIGACAO AS (
+    SELECT ESTADO, NOTA_KEY AS NOTA FROM NOTAS_IR_BASE
+    UNION   /* distinct proposital */
+    SELECT ESTADO, NOTA            FROM NOTAS_OC_LN
+),
+
+MEDIDAS_LIGACAO AS (
+    SELECT
+        m.ESTADO,
+        LTRIM(m.NOTA, '0') AS NOTA,
+        (
+               (UPPER(TRIM(m.GRUPO_MEDIDA)) = 'LIGAREA'
+                AND TRIM(m.CODIGO_MEDIDA) IN ('0024', '0025'))
+            OR (UPPER(TRIM(m.GRUPO_MEDIDA)) = 'LIGINSTA'
+                AND TRIM(m.CODIGO_MEDIDA) IN ('0001', '0002'))
+            OR (UPPER(TRIM(m.GRUPO_MEDIDA)) = 'COMUCONC'
+                AND TRIM(m.CODIGO_MEDIDA) = '0001')
+        ) AS IS_LIGACAO,
+        COALESCE(
+            m.DATA_CONCLUSAO_MEDIDA,
+            m.DATA_CRIACAO_MEDIDA,
+            m.DATA_DADOS
+        ) AS DATA_MEDIDA
+    FROM SRC_MEDIDAS_NOTAS_SERVICOS m
+    WHERE EXISTS (
+        SELECT 1
+        FROM NOTAS_ESCOPO_LIGACAO e
+        WHERE e.ESTADO = m.ESTADO
+          AND e.NOTA   = LTRIM(m.NOTA, '0')
+    )
+),
+
+CLIENTE_LIGADO AS (
+    SELECT
+        ESTADO,
+        NOTA AS NOTA_OC,
+        IFF(COUNT_IF(IS_LIGACAO) > 0, 'SIM', 'NÃO') AS CLIENTE_LIGADO,
+        MAX(CASE WHEN IS_LIGACAO THEN DATA_MEDIDA END)          AS DATA_LIGACAO
+    FROM MEDIDAS_LIGACAO
+    GROUP BY ESTADO, NOTA
+),
+
+/* =============================================================================
+   5. ELETROPROJ
+   ============================================================================= */
+EP_SLI AS (
+    SELECT
+        sli.ESTADO,
+        sli.SLI_ID,
+        sli.SLI_NOTA_SAP,
+        LTRIM(sli.SLI_NOTA_SAP, '0')                   AS NOTA_PROJ,
+        REGEXP_SUBSTR(sli.SLI_DESC_OBRA, '[0-9]{10}')  AS NOTA_CCS_SGO,
+        sli.SLI_SOLICITANTE,
+        sli.SLI_DESC_OBRA,
+        sli.SLI_STATUS_NOTA
+    FROM SRC_EP_SOLICITACAO_INVESTIMENTO sli
+    /* sem a nota CCS de 10 digitos no texto da obra a linha nunca casa adiante */
+    WHERE REGEXP_SUBSTR(sli.SLI_DESC_OBRA, '[0-9]{10}') IS NOT NULL
+),
+
+EP_PEP_I AS (
+    SELECT
+        r.ESTADO,
+        LTRIM(TRIM(r.NOTA), '0') AS NOTA_PROJ,
+        LISTAGG(DISTINCT TRIM(r.PEP_NV_4), ' | ')
+            WITHIN GROUP (ORDER BY TRIM(r.PEP_NV_4)) AS PEP_I
+    FROM SRC_EP_PROJETO_RETORNO_SAP r
+    WHERE TRIM(r.PEP_NV_4) LIKE '%.I'
+      AND NULLIF(TRIM(r.NOTA), '') IS NOT NULL
+    GROUP BY 1, 2
+),
+
+ELETROPROJ AS (
+    SELECT
+        sli.ESTADO,
+        sli.NOTA_CCS_SGO,
+        sli.NOTA_PROJ,
+        sli.SLI_SOLICITANTE,
+        sli.SLI_DESC_OBRA,
+        sn.DESC_STATUS_NOTA,
+        sn.SAP_STATUS_NOTA,
+        sn.PROJ_STATUS_NOTA,
+        dc.ELEMENTO_PEP_NIVEL3,
+        rr.PEP_I,
+        dor.VL_MATERIAL_TOTAL,
+        dor.VL_MO_TOTAL,
+        dor.VL_TOTAL_ORCAMENTO
+    FROM EP_SLI sli
+    LEFT JOIN SRC_EP_STATUS_NOTA sn
+        ON  sn.ESTADO         = sli.ESTADO
+        AND sn.ID_STATUS_NOTA = sli.SLI_STATUS_NOTA
+    LEFT JOIN SRC_EP_DADOS_ORCAMENTO dor
+        ON  dor.ESTADO = sli.ESTADO
+        AND dor.SLI_ID = sli.SLI_ID
+    LEFT JOIN SRC_EP_DADOS_CONSTRUCAO dc
+        ON  dc.ESTADO = sli.ESTADO
+        AND dc.SLI_ID = sli.SLI_ID
+    LEFT JOIN EP_PEP_I rr
+        ON  rr.ESTADO    = sli.ESTADO
+        AND rr.NOTA_PROJ = sli.NOTA_PROJ
+    /* uma linha por (estado, nota CCS) -- ordenacao identica a original */
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY sli.ESTADO, sli.NOTA_CCS_SGO
+        ORDER BY
+            sli.SLI_NOTA_SAP      DESC,
+            dc.ELEMENTO_PEP_NIVEL3 DESC NULLS LAST
+    ) = 1
+),
+
+/* =============================================================================
+   6. MULTAS (ANEXO IV) -- somente valores positivos
+   ============================================================================= */
+MULTAS_A_PAGAR AS (
+    SELECT
+        ESTADO,
+        LTRIM(NOTA, '0')   AS NOTA,
+        VALOR_MULTA_EUSD_M AS MULTA,
+        PRAZO
+    FROM SRC_ANEXOIV_PENDENTES_BASE
+    WHERE VALOR_MULTA_EUSD_M > 0
+),
+
+/* =============================================================================
+   7. VINCULOS PELA INSTALACAO -- somente notas OC e LN
+   ============================================================================= */
+VINCULOS AS (
+    SELECT
+        ir.ESTADO,
+        ir.NOTA_IR,
+        n.NOTA          AS NOTA_VINCULADA,
+        n.TIPO_NOTA     AS TIPO_NOTA_VINCULADA,
+        n.STATUS_CCS    AS STATUS_CCS_VINCULADA,
+        n.DATA_CRIACAO  AS DATA_CRIACAO_VINCULADA,
+        n.INICIO_AVARIA AS INICIO_AVARIA_VINCULADA,
+        COALESCE(cl.CLIENTE_LIGADO, 'NÃO') AS CLIENTE_LIGADO_VINCULADA,
+        cl.DATA_LIGACAO AS DATA_ENERGIZACAO_VINCULADA
+    FROM NOTAS_IR_INSTALACAO ir
+    INNER JOIN NOTAS_OC_LN n
+        ON  n.ESTADO     = ir.ESTADO
+        AND n.INSTALACAO = ir.INSTALACAO
+        AND n.NOTA      <> ir.NOTA_IR
+    LEFT JOIN CLIENTE_LIGADO cl
+        ON  cl.ESTADO  = n.ESTADO
+        AND cl.NOTA_OC = n.NOTA
+    /* [DEDUP] uma linha por (nota IR, nota vinculada): a mesma nota OC/LN pode
+       estar em mais de uma instalacao da nota IR e repetiria nas listas LISTAGG.
+       Remova este QUALIFY para voltar ao comportamento anterior. */
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY ir.ESTADO, ir.NOTA_IR, n.NOTA
+        ORDER BY n.DATA_CRIACAO DESC NULLS LAST
+    ) = 1
+),
+
+/* =============================================================================
+   8. AGREGACAO DOS VINCULOS -- uma linha por nota IR
+      VINCULOS ja e unico por nota vinculada, logo COUNT(*)/COUNT_IF
+      equivalem aos COUNT(DISTINCT) da versao anterior.
+   ============================================================================= */
+VINCULOS_AGG AS (
+    SELECT
+        ESTADO,
+        NOTA_IR,
+
+        COUNT(*)                                     AS QTD_NOTAS_VINCULADAS,
+        COUNT_IF(CLIENTE_LIGADO_VINCULADA = 'SIM')   AS QTD_VINCULADAS_LIGADAS,
+        COUNT_IF(CLIENTE_LIGADO_VINCULADA <> 'SIM')  AS QTD_VINCULADAS_NAO_LIGADAS,
+
+        MIN(DATA_ENERGIZACAO_VINCULADA) AS DATA_PRIMEIRA_ENERGIZACAO,
+        MAX(DATA_ENERGIZACAO_VINCULADA) AS DATA_ULTIMA_ENERGIZACAO,
+        MAX(DATA_CRIACAO_VINCULADA)     AS DATA_ULTIMA_NOTA_VINCULADA,
+
+        /* lista somente as notas ligadas, com a data de energizacao */
+        LISTAGG(
+            CASE
+                WHEN CLIENTE_LIGADO_VINCULADA = 'SIM'
+                THEN NOTA_VINCULADA
+                     || ' (' || COALESCE(TIPO_NOTA_VINCULADA, '?') || ') '
+                     || TO_VARCHAR(DATA_ENERGIZACAO_VINCULADA, 'DD/MM/YYYY')
+            END,
+            ' | '
+        ) WITHIN GROUP (
+            ORDER BY
+                DATA_ENERGIZACAO_VINCULADA DESC NULLS LAST,
+                NOTA_VINCULADA
+        ) AS NOTAS_VINCULADAS_LIGADAS,
+
+        /* lista de todas as notas OC/LN vinculadas */
+        LISTAGG(
+            NOTA_VINCULADA || ' (' || COALESCE(TIPO_NOTA_VINCULADA, '?') || ')',
+            ' | '
+        ) WITHIN GROUP (
+            ORDER BY
+                DATA_CRIACAO_VINCULADA DESC NULLS LAST,
+                NOTA_VINCULADA
+        ) AS NOTAS_VINCULADAS,
+
+        LISTAGG(DISTINCT TIPO_NOTA_VINCULADA, ', ')
+            WITHIN GROUP (ORDER BY TIPO_NOTA_VINCULADA) AS TIPOS_NOTAS_VINCULADAS
+
+    FROM VINCULOS
+    GROUP BY ESTADO, NOTA_IR
+),
+
+/* =============================================================================
+   9. VINCULO MAIS RECENTE -- compatibilidade com o BI
+   ============================================================================= */
+VINCULO_PRINCIPAL AS (
+    SELECT
+        ESTADO,
+        NOTA_IR,
+        NOTA_VINCULADA,
+        STATUS_CCS_VINCULADA,
+        INICIO_AVARIA_VINCULADA
+    FROM VINCULOS
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY ESTADO, NOTA_IR
+        ORDER BY
+            DATA_CRIACAO_VINCULADA DESC NULLS LAST,
+            NOTA_VINCULADA         DESC
+    ) = 1
+)
+
+/* =============================================================================
+   10. CONSULTA FINAL -- 85 colunas, nomes identicos a versao anterior
+   ============================================================================= */
+SELECT
+    tab1.NOTA_KEY AS NOTA,
+    tab1.TIPO_NOTA,
+
+    /* LIGACAO DA NOTA VINCULADA DE REFERENCIA */
+    COALESCE(lig.CLIENTE_LIGADO, 'NÃO')     AS CLIENTE_LIGADO,
+    TO_CHAR(lig.DATA_LIGACAO, 'DD/MM/YYYY')             AS DATA_LIGACAO,
+    vp.STATUS_CCS_VINCULADA                             AS STATUS_CCS_NOTA_OC,
+    ep.NOTA_PROJ                                        AS NOTA_PROJ,
+    vp.NOTA_VINCULADA                                   AS NOTA_OC_VINCULADA,
+    vp.INICIO_AVARIA_VINCULADA                          AS INICIO_AVARIA_NOTA_VINCULADA,
+
+    /* VINCULOS AGREGADOS */
+    COALESCE(va.QTD_NOTAS_VINCULADAS, 0)                AS QTD_NOTAS_VINCULADAS,
+    /* QTD_CLIENTES_LIGADOS == QTD_NOTAS_VINCULADAS_LIGADAS (ver cabecalho) */
+    COALESCE(va.QTD_VINCULADAS_LIGADAS, 0)              AS QTD_CLIENTES_LIGADOS,
+    va.TIPOS_NOTAS_VINCULADAS,
+    va.NOTAS_VINCULADAS,
+    va.DATA_ULTIMA_NOTA_VINCULADA,
+    COALESCE(va.QTD_VINCULADAS_LIGADAS, 0)              AS QTD_NOTAS_VINCULADAS_LIGADAS,
+    COALESCE(va.QTD_VINCULADAS_NAO_LIGADAS, 0)          AS QTD_NOTAS_VINCULADAS_NAO_LIGADAS,
+    IFF(COALESCE(va.QTD_VINCULADAS_LIGADAS, 0) > 0,
+        'SIM', 'NÃO')                       AS TEM_VINCULADA_LIGADA,
+    va.DATA_PRIMEIRA_ENERGIZACAO,
+    va.DATA_ULTIMA_ENERGIZACAO,
+    va.NOTAS_VINCULADAS_LIGADAS,
+
+    /* LIGACAO DA PROPRIA NOTA IR */
+    COALESCE(cl_ir.CLIENTE_LIGADO, 'NÃO')   AS CLIENTE_LIGADO_NOTA_IR,
+    cl_ir.DATA_LIGACAO                                  AS DATA_ENERGIZACAO_NOTA_IR,
+
+    /* ELETROPROJ */
+    ep.DESC_STATUS_NOTA                                 AS STATUS_SGO,
+    ep.SAP_STATUS_NOTA                                  AS STATUS_SAP,
+    ep.PROJ_STATUS_NOTA                                 AS STATUS_PROJ,
+    ep.ELEMENTO_PEP_NIVEL3                              AS PEP,
+    ep.PEP_I,
+    ep.SLI_SOLICITANTE,
+    ep.SLI_DESC_OBRA,
+
+    /* DADOS DA NOTA IR */
+    tab1.TEXTO_BREVE,
+    tab1.GRUPO_CODES,
+    tab1.CODIFICACAO,
+    tab1.STATUS_CCS,
+
+    /* MEDIDA ATUAL */
+    med.GRUPO_MEDIDA_ATUAL                              AS MEDIDA_ATUAL,
+    med.CODIGO_MEDIDA_ATUAL                             AS CODIGO_MEDIDA_ATUAL,
+    tab4.TEXTO_BREVE_CODIGO                             AS TEXTO_MEDIDA_ATUAL,
+
+    /* MEDIDA ANTERIOR */
+    med.GRUPO_MEDIDA_ANTERIOR                           AS MEDIDA_ANTERIOR,
+    med.CODIGO_MEDIDA_ANTERIOR                          AS CODIGO_MEDIDA_ANTERIOR,
+    tab4_ant.TEXTO_BREVE_CODIGO                         AS TEXTO_MEDIDA_ANTERIOR,
+    texto_ant.TEXTO                                     AS TEXTO_OBSERVACAO_MEDIDA_ANTERIOR,
+
+    /* INFORMACOES DA MEDIDA ATUAL */
+    med.DATA_ENCERRAMENTO_NOTA,
+    med.DATA_CRIACAO_MEDIDA,
+    med.CONCLUIDO_POR,
+    med.DATA_CONCLUSAO_MEDIDA,
+    med.INICIO_PROGRAMADO_MEDIDA,
+    med.FIM_PROGRAMADO_MEDIDA,
+
+    /* CADASTRO / ESTRUTURA */
+    cad.INSTALACAO,
+    cad.CONTA_CONTRATO,
+    tgm.TEXTO_BREVE_GRUPO_CODIGO,
+    tab1.CENTRO_TRABALHO,
+    ctg.GERENCIA,
+    tab1.AREA_ESTRUT_REGIONAL,
+
+    /* FISCALIZACAO / DEMANDA INTERNA */
+    status_fisc.DESCRICAO                               AS STATUS_FISCALIZACAO,
+    status_di.DESCRICAO                                 AS STATUS_DEMANDA_INTERNA,
+    di.DATA_ABERTURA_SOLIC                              AS DATA_ABERTURA_DEMANDA_INTERNA,
+    di.DESCRICAO_SOLICITACAO                            AS DESCRICAO_SOLICITACAO_DEMANDA_INTERNA,
+    di.NOME_ANALISTA_SOLIC                              AS NOME_SOLICITANTE_DEMANDA_INTERNA,
+
+    /* ENDERECO / REGIONAL */
+    cad.REGIONAL,
+    cad.MUNICIPIO,
+    cad.BAIRRO,
+    cad.PERIMETRO,
+    cad.NOME,
+    cad.ENDERECO,
+
+    /* DATAS DA NOTA */
+    tab1.CARTEIRA_CLIENTE,
+    tab1.DATA_CRIACAO,
+    tab1.INICIO_DESEJADO,
+    tab1.FIM_DESEJADO,
+    tab1.INICIO_AVARIA,
+    tab1.DATA_ALTERACAO,
+
+    cad.LATITUDE,
+    cad.LONGITUDE,
+
+    /* ORCAMENTO */
+    ep.VL_MATERIAL_TOTAL,
+    ep.VL_MO_TOTAL,
+    ep.VL_TOTAL_ORCAMENTO,
+
+    /* DATAS DE FISCALIZACAO */
+    fsb.DATA_AGENDAMENTO,
+    fsb.DATA_ATRIBUICAO_FISCAL,
+    fsb.DATA_DA_FISCALIZACAO,
+    fsb.DATA_PREVISAO_ENTREGA,
+    fsb.DATA_SOLICITACAO,
+    fsb.DURACAO_DIAS,
+    fsb.DATA_DEVOLUCAO,
+    fsb.DATA_CONCLUSAO,
+    fsb.DATA_ENTREGA_RELATORIO_CAMPO,
+
+    /* ANEXO IV */
+    mf.PRAZO                                            AS PRAZO_ANEXOIV,
+    mf.MULTA,
+
+    /* ESTADO (corporativo) */
+    tab1.ESTADO
+
+FROM NOTAS_IR_BASE tab1
+
+/* CADASTRO */
+INNER JOIN SRC_TAB_CADASTRO cad
+    ON  cad.ESTADO     = tab1.ESTADO
+    AND cad.INSTALACAO = tab1.INSTALACAO
+
+/* MEDIDA ATUAL + ANTERIOR (join pela NOTA BRUTA, como na versao original) */
+INNER JOIN MEDIDAS_ATUAL_ANTERIOR med
+    ON  med.ESTADO = tab1.ESTADO
+    AND med.NOTA   = tab1.NOTA
+
+/* DESCRICAO DA MEDIDA ATUAL */
+LEFT JOIN SRC_TAB_CODES_MEDIDAS tab4
+    ON  tab4.ESTADO       = med.ESTADO
+    AND tab4.GRUPO_CODIGO = med.GRUPO_MEDIDA_ATUAL
+    AND tab4.CODIGO       = med.CODIGO_MEDIDA_ATUAL
+
+/* DESCRICAO DA MEDIDA ANTERIOR */
+LEFT JOIN SRC_TAB_CODES_MEDIDAS tab4_ant
+    ON  tab4_ant.ESTADO       = med.ESTADO
+    AND tab4_ant.GRUPO_CODIGO = med.GRUPO_MEDIDA_ANTERIOR
+    AND tab4_ant.CODIGO       = med.CODIGO_MEDIDA_ANTERIOR
+
+/* OBSERVACAO DA MEDIDA ANTERIOR */
+LEFT JOIN SRC_TEXTO_OBS_MEDIDAS texto_ant
+    ON  texto_ant.ESTADO            = med.ESTADO
+    AND LTRIM(texto_ant.NOTA, '0')  = LTRIM(med.NOTA_MEDIDA_ANTERIOR, '0')
+
+/* GRUPO DA MEDIDA ATUAL */
+LEFT JOIN SRC_TAB_GRPCODES_MEDIDAS tgm
+    ON  tgm.ESTADO       = med.ESTADO
+    AND tgm.GRUPO_CODIGO = med.GRUPO_MEDIDA_ATUAL
+
+/* CENTRO DE TRABALHO */
+LEFT JOIN SRC_TAB_CENTRO_TRABALHO_GERENCIA ctg
+    ON  ctg.ESTADO          = tab1.ESTADO
+    AND ctg.CENTRO_TRABALHO = tab1.CENTRO_TRABALHO
+
+/* ELETROPROJ */
+LEFT JOIN ELETROPROJ ep
+    ON  ep.ESTADO       = tab1.ESTADO
+    AND ep.NOTA_CCS_SGO = tab1.NOTA_KEY
+
+/* FISCALIZACAO (ver pendencias no cabecalho) */
+LEFT JOIN SRC_FISCALIZACAO fsb
+    ON fsb.COD_NOTA = ep.NOTA_PROJ
+
+LEFT JOIN SRC_STATUS_SISCO status_fisc
+    ON status_fisc.STATUS_ID = fsb.STATUS_SISCO_FISCALIZACAO_ID
+
+/* DEMANDA INTERNA (ver pendencias no cabecalho) */
+LEFT JOIN SRC_DEMANDA_INTERNA di
+    ON di.NOTA = fsb.COD_NOTA
+
+LEFT JOIN SRC_STATUS_SISCO status_di
+    ON status_di.STATUS_ID = di.SITUACAO_DEM_ID
+
+/* VINCULOS POR INSTALACAO */
+LEFT JOIN VINCULOS_AGG va
+    ON  va.ESTADO  = tab1.ESTADO
+    AND va.NOTA_IR = tab1.NOTA_KEY
+
+LEFT JOIN VINCULO_PRINCIPAL vp
+    ON  vp.ESTADO  = tab1.ESTADO
+    AND vp.NOTA_IR = tab1.NOTA_KEY
+
+/* LIGACAO DA NOTA VINCULADA DE REFERENCIA */
+LEFT JOIN CLIENTE_LIGADO lig
+    ON  lig.ESTADO  = vp.ESTADO
+    AND lig.NOTA_OC = vp.NOTA_VINCULADA
+
+/* LIGACAO DA PROPRIA NOTA IR */
+LEFT JOIN CLIENTE_LIGADO cl_ir
+    ON  cl_ir.ESTADO  = tab1.ESTADO
+    AND cl_ir.NOTA_OC = tab1.NOTA_KEY
+
+/* MULTA DA NOTA VINCULADA DE REFERENCIA */
+LEFT JOIN MULTAS_A_PAGAR mf
+    ON  mf.ESTADO = vp.ESTADO
+    AND mf.NOTA   = vp.NOTA_VINCULADA
+;
+
+
+/* =============================================================================
+   PONTOS DE ATENCAO POS-DEPLOY
+   ============================================================================= */
+-- ALTER TABLE SB_TATICO_PA.OBRAS.TB_NOTAS_IR_CORPORATIVO
+--     CLUSTER BY (ESTADO, DATA_CRIACAO);
+
+-- GRANT SELECT ON TABLE SB_TATICO_PA.OBRAS.TB_NOTAS_IR_CORPORATIVO
+--     TO ROLE <ROLE_DO_BI>;

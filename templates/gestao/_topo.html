@@ -1,0 +1,29 @@
+{% load utilidades %}
+<header class="topo">
+  <div>
+    <p class="eyebrow">Carteira de notas de incorporação</p>
+    <h1>{{ titulo }}</h1>
+    {% if subtitulo %}<p class="muted topo-sub">{{ subtitulo }}</p>{% endif %}
+  </div>
+  <p class="topo-atualizado">
+    {% if ultima %}Dados do Snowflake de <strong>{{ ultima.finalizado_em|date:"d/m/Y H:i" }}</strong>{% else %}Base ainda não sincronizada{% endif %}
+  </p>
+</header>
+<form class="barra-filtros" method="get" aria-label="Filtros">
+  {% for dim, rotulo in dimensoes.items %}
+    <label>{{ rotulo }}
+      <select name="{{ dim }}" data-autoenvio>
+        <option value="">Todos</option>
+        {% for v in opcoes|obter:dim %}<option value="{{ v }}" {% if f|obter:dim == v %}selected{% endif %}>{{ v }}</option>{% endfor %}
+      </select>
+    </label>
+  {% endfor %}
+  {% for k, v in f.items %}{% if k == "nivel" or k == "periodo" or k == "grao" %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+  <noscript><button class="button small" type="submit">Aplicar</button></noscript>
+</form>
+{% if chips %}
+  <div class="chips-filtros" aria-label="Filtros ativos">
+    {% for c in chips %}<a class="chip-filtro" href="{{ c.remover }}" title="Remover filtro">{{ c.rotulo }}: <strong>{{ c.valor }}</strong> <span aria-hidden="true">✕</span></a>{% endfor %}
+    <a class="chip-filtro limpar" href="?">Limpar filtros</a>
+  </div>
+{% endif %}

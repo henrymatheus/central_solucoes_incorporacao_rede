@@ -1,0 +1,22 @@
+{% load static %}<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a2463">
+  <title>{{ titulo }} | Central de Soluções de Incorporação de Redes</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body class="error-page">
+  <main class="error-card">
+    <img src="{% static 'img/equatorial-logo-white.png' %}" alt="Grupo Equatorial" width="160" height="39">
+    <p class="error-code">Erro {{ codigo }}</p>
+    <h1>{{ titulo }}</h1>
+    <p>{{ mensagem }}</p>
+    <div class="error-actions">
+      <a class="button primary" href="/">Ir para o início</a>
+      <a class="button" href="javascript:history.back()">Voltar</a>
+    </div>
+  </main>
+</body>
+</html>

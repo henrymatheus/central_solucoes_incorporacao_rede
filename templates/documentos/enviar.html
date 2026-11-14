@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% load seguranca %}
+{% block title %}Publicar documento | Central de Incorporação{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">REPOSITÓRIO OFICIAL</p><h1>Publicar documento modelo</h1><p class="muted">Uma nova publicação cria uma versão e arquiva a anterior.</p></div></div>
+<form class="panel stack-form" method="post" enctype="multipart/form-data">{% csrf_token %}{% chave_envio %}
+  <label>Título<input name="titulo" required maxlength="180" value="{{ dados.titulo|default:'' }}"></label>
+  <label>Categoria<select name="categoria" required>{% for value,label in categorias %}<option value="{{ value }}" {% if dados.categoria == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <label>Descrição<textarea name="descricao" rows="3" maxlength="2000">{{ dados.descricao|default:'' }}</textarea></label>
+  <label>Arquivo<input name="arquivo" type="file" required accept="{{ extensoes }}" data-max-mb="{{ tamanho_maximo_mb }}"><small class="muted">Até {{ tamanho_maximo_mb }} MB.</small></label>
+  <label>Distribuidora<select name="distribuidora"><option value="">Corporativo (todas as distribuidoras)</option>{% for distribuidora in distribuidoras %}<option value="{{ distribuidora.pk }}" {% if dados.distribuidora == distribuidora.pk|stringformat:"s" %}selected{% endif %}>{{ distribuidora.nome }}</option>{% endfor %}</select></label>
+  <div><button class="button primary" type="submit" data-loading-text="Publicando…">Publicar versão</button> <a class="button" href="{% url 'documentos:lista' %}">Cancelar</a></div>
+</form>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Documentos modelo | Central de Incorporação{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">REPOSITÓRIO OFICIAL</p><h1>Documentos modelo</h1><p class="muted">Arquivos vigentes e versionados para apoiar o processo.</p></div>{% if pode_publicar %}<a class="button primary" href="{% url 'documentos:enviar' %}">+ Publicar documento</a>{% endif %}</div>
+<form class="filter-panel" method="get"><label class="wide">Buscar<input name="q" value="{{ request.GET.q }}" placeholder="Título do documento"></label><label>Categoria<select name="categoria"><option value="">Todas</option>{% for value,label in categorias %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label><button class="button" type="submit">Filtrar</button></form>
+<section class="panel"><div class="table-wrap"><table><thead><tr><th>Documento</th><th>Categoria</th><th>Versão vigente</th><th>Distribuidora</th><th>Publicado por</th><th></th></tr></thead><tbody>
+{% for documento in documentos %}<tr><td><strong>{{ documento.titulo }}</strong><small>{{ documento.descricao|default:"" }}</small></td><td>{{ documento.get_categoria_display }}</td><td><span class="badge success">v{{ documento.versao }}</span></td><td>{{ documento.distribuidora.sigla|default:"Corporativo" }}</td><td>{% firstof documento.enviado_por.get_full_name documento.enviado_por.username "—" %}</td><td><a class="button small" href="{% url 'documentos:download' documento.pk %}" data-download>Baixar</a></td></tr>
+{% empty %}<tr><td colspan="6" class="empty-state">Nenhum documento publicado. Desenvolvedores podem enviar as versões vigentes por aqui.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

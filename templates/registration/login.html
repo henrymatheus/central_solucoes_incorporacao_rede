@@ -1,0 +1,99 @@
+{% load static %}
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a2463">
+  <title>Acessar | Central de Soluções de Incorporação de Redes</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  <script src="{% static 'js/app.js' %}" defer></script>
+</head>
+<body class="login-page">
+  <main class="login-stage">
+    <div class="login-art" aria-hidden="true">
+      <svg class="login-grid-lines" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" focusable="false">
+        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+          <!-- cabos -->
+          <g class="login-cables" stroke-width="1.6">
+            <path d="M0 268 Q360 330 722 236"/>
+            <path d="M940 236 Q1270 330 1600 250"/>
+            <path d="M0 362 Q350 430 692 336"/>
+            <path d="M970 336 Q1280 440 1600 352"/>
+            <path d="M0 468 Q380 520 742 456"/>
+            <path d="M920 456 Q1250 540 1600 470"/>
+          </g>
+          <!-- torre -->
+          <g class="login-tower" stroke-width="2.4">
+            <path d="M818 90 830 46 842 90M818 90 765 1000M842 90 895 1000"/>
+            <path d="M811.6 200h36.8M805.8 300h48.4M798.8 420h62.4M790.6 560h78.8M781.3 720h97.4M772 880h116"/>
+            <path d="M818 90 848.4 200M842 90 811.6 200M811.6 200 854.2 300M848.4 200 805.8 300M805.8 300 861.2 420M854.2 300 798.8 420M798.8 420 869.4 560M861.2 420 790.6 560M790.6 560 878.7 720M869.4 560 781.3 720M781.3 720 888 880M878.7 720 772 880M772 880 895 1000M888 880 765 1000"/>
+            <path d="M722 200h218M722 200l89.6 30M940 200l-91.6 30"/>
+            <path d="M692 300h278M692 300l113.8 32M970 300l-115.8 32"/>
+            <path d="M742 420h178M742 420l56.8 26M920 420l-58.8 26"/>
+            <path d="M722 200v36M940 200v36M692 300v36M970 300v36M742 420v36M920 420v36"/>
+          </g>
+        </g>
+      </svg>
+      <span class="login-band login-band-a"></span>
+      <span class="login-band login-band-b"></span>
+      <span class="login-ring login-ring-a"></span>
+      <span class="login-ring login-ring-b"></span>
+    </div>
+
+    <section class="login-panel" aria-labelledby="login-title">
+      <a class="login-brand" href="{% url 'gestao:visao_geral' %}" aria-label="Grupo Equatorial — início">
+        <img src="{% static 'img/equatorial-logo-white.png' %}" alt="Grupo Equatorial" width="200" height="49">
+      </a>
+
+      <h1 id="login-title" class="login-title">
+        <span>Central de Soluções de</span>
+        <strong>Incorporação de Redes</strong>
+      </h1>
+      <span class="login-title-rule" aria-hidden="true"></span>
+
+      {% if messages %}
+        <div class="login-notice" role="status">{% for message in messages %}<p>{{ message }}</p>{% endfor %}</div>
+      {% endif %}
+
+      <div class="login-card">
+        <p class="login-feedback" role="alert" data-login-error {% if not form.errors %}hidden{% endif %}>{{ form.primeira_mensagem_erro }}</p>
+
+        <form class="login-form" method="post" data-async-login novalidate>
+          {% csrf_token %}
+          <label class="sr-only" for="{{ form.username.id_for_label }}">Usuário</label>
+          <div class="login-input-wrap">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm0 2c-4.4 0-8 2.5-8 5.6V21h16v-1.4c0-3.1-3.6-5.6-8-5.6Z"/></svg>
+            {{ form.username }}
+          </div>
+
+          <label class="sr-only" for="{{ form.password.id_for_label }}">Senha</label>
+          <div class="login-input-wrap">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 10V7a5 5 0 0 1 10 0v3h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1Zm2 0h6V7a3 3 0 0 0-6 0v3Zm3 4a1.5 1.5 0 0 0-.8 2.8V18h1.6v-1.2A1.5 1.5 0 0 0 12 14Z"/></svg>
+            {{ form.password }}
+            <button class="password-toggle" type="button" data-password-toggle="{{ form.password.id_for_label }}" aria-label="Mostrar senha" aria-pressed="false">
+              <svg class="eye-open" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Zm10 4a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/></svg>
+              <svg class="eye-closed" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m3 2 19 19-1.4 1.4-3.1-3.1A11.7 11.7 0 0 1 12 21C5.6 21 2 14 2 14a18.6 18.6 0 0 1 4.1-5.3L1.6 3.4 3 2Zm5 8.5a4 4 0 0 0 5.5 5.5L8 10.5ZM12 5c6.4 0 10 7 10 7a19 19 0 0 1-3.3 4.5l-2.2-2.2A4.5 4.5 0 0 0 11.7 7h-.4L9.4 5.1A12 12 0 0 1 12 5Z"/></svg>
+            </button>
+          </div>
+
+          <input type="hidden" name="next" value="{{ next }}">
+          <button class="login-submit" type="submit" data-loading-text="Entrando…">
+            <span>Acessar</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M13.3 5.3 12 6.6l4.4 4.4H4v2h12.4L12 17.4l1.3 1.3L20 12l-6.7-6.7Z"/></svg>
+          </button>
+        </form>
+      </div>
+
+      <p class="login-tagline">Juntos por uma rede<br>cada vez <strong>mais forte.</strong></p>
+    </section>
+
+    <img
+      class="login-mascot"
+      src="{% static 'img/engenheiro-equatorial.png' %}"
+      alt="Engenheiro eletricista do Grupo Equatorial segurando o projeto da rede e um tablet"
+      width="1152" height="768"
+    >
+  </main>
+</body>
+</html>
